@@ -311,7 +311,7 @@ def attach_productivity(app):
                     'customers':[{'id':c.id,'name':c.name,'billing_address':c.billing_address} for c in db.scalars(select(m.Customer).order_by(m.Customer.name))],
                     'locations':[{'id':l.id,'customer_id':l.customer_id,'name':l.name,'address':l.address} for l in db.scalars(select(m.Location))],
                     'jobs':[{'job_number':j.job_number,'customer_id':j.customer_id,'location_id':j.location_id,'description':j.description} for j in db.scalars(select(m.Job))],
-                    'technicians':[{'id':u.id,'name':u.display_name} for u in db.scalars(select(m.User).where(m.User.role=='technician',m.User.active==True))]}
+                    'technicians':[{'id':u.id,'name':u.display_name} for u in db.scalars(select(m.User).where(m.User.role.in_(('owner','office','technician')),m.User.active==True))]}
 
     @app.post('/api/calls/quick',status_code=201)
     def quick_call(data:QuickCallIn,user=Depends(m.require('manage_jobs'))):
@@ -353,7 +353,7 @@ def attach_productivity(app):
             if data.technician_id:
                 m.lock_time_user(db,data.technician_id)
                 tech=db.get(m.User,data.technician_id)
-                if not tech or tech.role!='technician' or not tech.active:raise HTTPException(422,'Select an active technician')
+                if not tech or tech.role not in ('owner','office','technician') or not tech.active:raise HTTPException(422,'Select an active technician')
                 overlap=db.scalar(select(m.DispatchAssignment.id).where(m.DispatchAssignment.technician_id==tech.id,m.DispatchAssignment.status!='Cancelled',m.DispatchAssignment.scheduled_start<data.scheduled_end,m.DispatchAssignment.scheduled_end>data.scheduled_start))
                 if overlap:raise HTTPException(409,'Technician has an overlapping assignment')
                 db.add(m.DispatchAssignment(work_order_id=w.id,technician_id=tech.id,scheduled_start=data.scheduled_start,scheduled_end=data.scheduled_end))
@@ -398,3 +398,4 @@ def attach_productivity(app):
             if not checklist:checklist=CallChecklist(work_order_id=w.id);db.add(checklist)
             checklist.parts_pricing_revision=row.revision;checklist.reviewed_by=user['id'];checklist.reviewed_at=pricing.now()
             m.log(db,'CONFIRM_CALL_PARTS','work_order',w.id,str(row.revision));db.commit();return call_readiness(db,w)
+

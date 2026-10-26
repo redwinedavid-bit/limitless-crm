@@ -593,7 +593,7 @@ def create_work_order(data:WorkOrderIn,user=Depends(require('manage_jobs'))):
 @app.get('/api/technicians')
 def technicians(user=Depends(require('manage_jobs'))):
     with Session(engine) as db:
-        return [{'id':u.id,'name':u.display_name,'username':u.username} for u in db.scalars(select(User).where(User.role=='technician',User.active==True).order_by(User.display_name))]
+        return [{'id':u.id,'name':u.display_name,'username':u.username} for u in db.scalars(select(User).where(User.role.in_(('owner','office','technician')),User.active==True).order_by(User.display_name))]
 
 @app.post('/api/work-orders/{wo_id}/assignments',status_code=201)
 def assign_work_order(wo_id:str,data:AssignmentIn,user=Depends(require('manage_jobs'))):
@@ -602,12 +602,13 @@ def assign_work_order(wo_id:str,data:AssignmentIn,user=Depends(require('manage_j
     with Session(engine) as db:
         w=permitted_wo(db,wo_id,user)
         t=db.get(User,data.technician_id)
-        if not t or not t.active or t.role!='technician':raise HTTPException(422,'Active technician required')
+        if not t or not t.active or t.role not in ('owner','office','technician'):raise HTTPException(422,'Active field team member required')
+        lock_time_user(db,t.id)
         existing=db.scalar(select(DispatchAssignment).where(DispatchAssignment.technician_id==t.id,DispatchAssignment.status!='Cancelled',DispatchAssignment.scheduled_start<data.scheduled_end,DispatchAssignment.scheduled_end>data.scheduled_start))
         if existing:raise HTTPException(409,'Technician has an overlapping assignment')
         a=DispatchAssignment(work_order_id=w.id,technician_id=t.id,scheduled_start=data.scheduled_start,scheduled_end=data.scheduled_end)
         db.add(a);db.flush();log(db,'ASSIGN','dispatch',a.id,w.id);db.commit()
-        return {'id':a.id,'work_order_id':w.id,'technician':t.display_name,'start':a.scheduled_start.isoformat(),'end':a.scheduled_end.isoformat()}
+        return {'id':a.id,'work_order_id':w.id,'technician_id':t.id,'technician':t.display_name,'start':a.scheduled_start.isoformat(),'end':a.scheduled_end.isoformat()}
 
 @app.get('/api/dispatch')
 def dispatch(user=Depends(require('manage_jobs'))):
@@ -615,7 +616,7 @@ def dispatch(user=Depends(require('manage_jobs'))):
         result=[]
         for a in db.scalars(select(DispatchAssignment).order_by(DispatchAssignment.scheduled_start)):
             w=db.get(WorkOrder,a.work_order_id); j=db.get(Job,w.job_id);t=db.get(User,a.technician_id)
-            result.append({'id':a.id,'work_order_id':w.id,'job_number':j.job_number,'summary':w.summary,'technician':t.display_name,'start':a.scheduled_start.isoformat(),'end':a.scheduled_end.isoformat(),'status':a.status})
+            result.append({'id':a.id,'work_order_id':w.id,'job_number':j.job_number,'summary':w.summary,'technician_id':t.id,'technician':t.display_name,'start':a.scheduled_start.isoformat(),'end':a.scheduled_end.isoformat(),'status':a.status})
         return result
 
 @app.post('/api/work-orders/{wo_id}/notes',status_code=201)
@@ -656,6 +657,7 @@ class EquipmentIn(BaseModel):
     refrigerant:str=''
     notes:str=''
 class TimeEntryIn(BaseModel):
+    technician_id:str|None=None
     started_at:datetime
     ended_at:datetime
     mileage:Decimal=Field(default=Decimal('0'),ge=0)
@@ -715,8 +717,15 @@ def add_field_time(wo_id:str,data:TimeEntryIn,user=Depends(current_user)):
     if elapsed<=0 or elapsed>24:raise HTTPException(422,'Shift must be greater than zero and no longer than 24 hours')
     with Session(engine) as db:
         w=permitted_wo(db,wo_id,user);field_report_open(db,w.id)
-        if user['role']=='technician': tech_id=user['id']
-        else:raise HTTPException(403,'Time entries must be entered by assigned technician')
+        if user['role'] not in ('owner','office','technician'):raise HTTPException(403,'Field team access required')
+        tech_id=data.technician_id or user['id']
+        if tech_id!=user['id'] and user['role'] not in ('owner','office'):
+            raise HTTPException(403,'You may only enter your own time')
+        member=db.get(User,tech_id)
+        if not member or not member.active or member.role not in ('owner','office','technician'):
+            raise HTTPException(422,'Active field team member required')
+        if not db.scalar(select(DispatchAssignment.id).where(DispatchAssignment.work_order_id==w.id,DispatchAssignment.technician_id==tech_id,DispatchAssignment.status!='Cancelled')):
+            raise HTTPException(422,'Assign this team member to the call before entering time')
         lock_time_user(db,tech_id)
         ensure_no_time_overlap(db,tech_id,start,end)
         if data.mileage>0 and db.scalar(select(CallMileage).where(CallMileage.work_order_id==wo_id)):
@@ -1513,3 +1522,4 @@ attach_customer_import(app)
 
 from .site_cleanup import attach_site_cleanup
 attach_site_cleanup(app)
+

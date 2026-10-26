@@ -47,3 +47,18 @@ def test_call_time_controls_match_script():
     refs=set(re.findall(r"by\('([^']+)'\)",script))
     assert refs <= ids,refs-ids
     assert html.index('id="manual-time"') < html.index('id="time-list"')
+
+
+def test_display_name_change_preserves_access_and_login(setup_clock):
+    clients,orders,now,tech_id,job=setup_clock;owner=clients['owner']
+    me=owner.get('/api/auth/me').json();uid=me['id']
+    with Session(m.engine) as db:
+        u=db.get(m.User,uid);before=(u.username,u.password_hash,u.role,u.active)
+    body={'display_name':'Owner/Admin','expected_display_name':me['name']}
+    endpoint=f'/api/admin/team/{uid}/name'
+    assert clients['tech'].put(endpoint,json=body).status_code==403
+    assert owner.put(endpoint,json=body).status_code==200
+    assert owner.put(endpoint,json=body).status_code==409
+    assert owner.get('/api/auth/me').json()['name']=='Owner/Admin'
+    with Session(m.engine) as db:
+        u=db.get(m.User,uid);assert (u.username,u.password_hash,u.role,u.active)==before

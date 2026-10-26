@@ -111,6 +111,10 @@ class TeamIn(BaseModel):
  google_email:str=Field(min_length=5,max_length=250,pattern=r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
  password:str=Field(min_length=12,max_length=128)
 
+class TeamNameIn(BaseModel):
+ display_name:str=Field(min_length=2,max_length=160)
+ expected_display_name:str
+
 class TeamActiveIn(BaseModel):
  active:bool
  expected_revision:int=Field(default=0,ge=0)
@@ -273,9 +277,9 @@ def inbox(db,user):
 def attach_operations(app):
  m.Base.metadata.create_all(m.engine)
  @app.get('/operations')
- def page(user=Depends(p.owner)):return FileResponse(m.ROOT/'operations.html')
+ def page(user=Depends(p.owner)):return FileResponse(m.ROOT/'operations.html',headers={'Cache-Control':'private, no-cache'})
  @app.get('/operations.js')
- def script(user=Depends(p.owner)):return FileResponse(m.ROOT/'operations.js',media_type='application/javascript')
+ def script(user=Depends(p.owner)):return FileResponse(m.ROOT/'operations.js',media_type='application/javascript',headers={'Cache-Control':'private, no-cache'})
  @app.get('/field-shortcuts.js')
  def field_script(user=Depends(m.current_user)):return FileResponse(m.ROOT/'field-shortcuts.js',media_type='application/javascript')
  @app.get('/api/admin/team')
@@ -296,6 +300,17 @@ def attach_operations(app):
    member=m.User(username=username,display_name=data.display_name.strip(),role='owner' if data.role=='admin' else 'technician',password_hash=password_hash(data.password),active=True)
    db.add(member);db.flush();db.add(TeamProfile(user_id=member.id,google_email=email));m.log(db,'CREATE_TEAM_ACCOUNT','user',member.id,p.dump({'role':data.role,'google_email':email}));db.commit()
    return {'id':member.id,'username':member.username,'role':data.role,'google_email':email,'note':'App account created. Google IAP and OAuth test-user access must be granted separately to this exact Google email before cloud sign-in.'}
+ @app.put('/api/admin/team/{user_id}/name')
+ def set_team_name(user_id:str,data:TeamNameIn,user=Depends(m.require('manage_users'))):
+  with Session(m.engine) as db:
+   member=db.scalar(select(m.User).where(m.User.id==user_id).with_for_update())
+   if not member:raise HTTPException(404,'Employee not found')
+   if member.display_name!=data.expected_display_name:raise HTTPException(409,'Name changed; reload the team list')
+   name=data.display_name.strip()
+   if len(name)<2:raise HTTPException(422,'Enter a display name')
+   member.display_name=name
+   m.log(db,'RENAME_TEAM_ACCOUNT','user',member.id,name);db.commit()
+   return {'id':member.id,'display_name':member.display_name}
  @app.put('/api/admin/team/{user_id}/active')
  def set_team_active(user_id:str,data:TeamActiveIn,user=Depends(m.require('manage_users'))):
   with Session(m.engine) as db:
@@ -502,3 +517,4 @@ def attach_operations(app):
    row=db.get(InboxState,(user['id'],item_key))
    if not row:row=InboxState(user_id=user['id'],item_key=item_key);db.add(row)
    row.snoozed_until=profit.stamp()+timedelta(hours=data.hours);db.commit();return {'snoozed':True}
+

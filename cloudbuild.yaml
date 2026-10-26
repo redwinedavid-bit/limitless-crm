@@ -32,7 +32,7 @@ steps:
       - -ceu
       - docker inspect --format='{{index .RepoDigests 0}}' 'us-central1-docker.pkg.dev/$PROJECT_ID/lms-test-images/crm:ci-$BUILD_ID' > /workspace/crm-image.txt
   - id: release-existing-service
-    name: gcr.io/google.com/cloudsdktool/google-cloud-cli:stable
+    name: gcr.io/google.com/cloudsdktool/google-cloud-cli:slim
     entrypoint: python3
     args: ['deploy/release.py', '/workspace/crm-image.txt', '$BRANCH_NAME']
 options:

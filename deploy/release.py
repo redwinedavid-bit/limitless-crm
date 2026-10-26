@@ -3,6 +3,7 @@ import json
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 PROJECT = 'limitless-crm-512612'
@@ -20,6 +21,37 @@ def run(*args, read=False):
 
 def service():
     return run('run', 'services', 'describe', SERVICE, read=True)
+
+
+def revision_details(name):
+    return run('run', 'revisions', 'describe', name, read=True)
+
+
+def wait_for_revision(name, image, timeout=180):
+    """Check the exact revision, independently of the service readiness summary."""
+    deadline = time.monotonic() + timeout
+    while True:
+        data = revision_details(name)
+        metadata = data.get('metadata', {})
+        containers = data.get('spec', {}).get('containers', [])
+        if metadata.get('name') != name or len(containers) != 1 or containers[0].get('image') != image:
+            raise SystemExit('Revision identity or image does not match this release. No traffic promotion performed.')
+        status = data.get('status', {})
+        condition = next((c for c in status.get('conditions', []) if c.get('type') == 'Ready'), {})
+        observed = status.get('observedGeneration')
+        generation = metadata.get('generation')
+        reconciled = generation is not None and observed is not None and str(generation) == str(observed)
+        state = str(condition.get('status', 'Unknown')).lower()
+        if reconciled and state == 'true':
+            print(f'Revision {name} is ready.', flush=True)
+            return
+        detail = condition.get('message') or condition.get('reason') or 'Readiness pending'
+        if reconciled and state == 'false':
+            raise SystemExit(f'Revision {name} is not ready: {detail}. Previous traffic is retained.')
+        if time.monotonic() >= deadline:
+            raise SystemExit(f'Timed out waiting for revision {name}: {detail}. Previous traffic is retained.')
+        print(f'Waiting for revision {name}: {detail}', flush=True)
+        time.sleep(5)
 
 
 def preserved_config(data):
@@ -54,14 +86,17 @@ def main():
     if preserved_config(before) != preserved_config(after):
         raise SystemExit('Runtime configuration changed unexpectedly. New revision has not been promoted.')
     revision = after.get('status', {}).get('latestCreatedRevisionName')
-    if not revision or revision != after.get('status', {}).get('latestReadyRevisionName'):
-        raise SystemExit('New revision is not ready. Previous traffic is retained.')
+    if not revision:
+        raise SystemExit('Cloud Run did not return a revision name. Previous traffic is retained.')
     if after['spec']['template']['spec']['containers'][0]['image'] != image:
         raise SystemExit('Image changed during release. Stop and review concurrent deployments.')
+    wait_for_revision(revision, image)
     # Do not approve overlapping releases; verify again immediately before promotion.
     current = service()
     if current['status']['latestCreatedRevisionName'] != revision:
         raise SystemExit('Another release is in progress. No traffic promotion performed.')
+    if preserved_config(before) != preserved_config(current):
+        raise SystemExit('Runtime configuration changed while waiting. No traffic promotion performed.')
     run('run', 'services', 'update-traffic', SERVICE, f'--to-revisions={revision}=100')
     final = service()
     serving = final.get('status', {}).get('traffic', [])

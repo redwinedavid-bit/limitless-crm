@@ -1,0 +1,237 @@
+{
+  "terraform": {
+    "required_version": ">= 1.6",
+    "required_providers": {
+      "google": {
+        "source": "hashicorp/google",
+        "version": "~> 7.27"
+      },
+      "random": {
+        "source": "hashicorp/random",
+        "version": "~> 3.7"
+      },
+      "google-beta": {
+        "source": "hashicorp/google-beta",
+        "version": "~> 7.27"
+      }
+    }
+  },
+  "provider": {
+    "google": {
+      "project": "limitless-crm-512612",
+      "region": "us-central1"
+    },
+    "google-beta": {
+      "project": "limitless-crm-512612",
+      "region": "us-central1"
+    }
+  },
+  "resource": {
+    "google_project_service": {
+      "apis": {
+        "for_each": "${toset([\"run.googleapis.com\", \"sqladmin.googleapis.com\", \"compute.googleapis.com\", \"servicenetworking.googleapis.com\", \"secretmanager.googleapis.com\", \"artifactregistry.googleapis.com\", \"cloudbuild.googleapis.com\", \"iap.googleapis.com\"])}",
+        "service": "${each.value}",
+        "disable_on_destroy": false
+      }
+    },
+    "google_compute_network": {
+      "crm": {
+        "name": "lms-test-network",
+        "auto_create_subnetworks": false,
+        "depends_on": [
+          "google_project_service.apis"
+        ]
+      }
+    },
+    "google_compute_subnetwork": {
+      "crm": {
+        "name": "lms-test-subnet",
+        "ip_cidr_range": "10.42.0.0/24",
+        "region": "us-central1",
+        "network": "${google_compute_network.crm.id}",
+        "private_ip_google_access": true
+      }
+    },
+    "google_compute_global_address": {
+      "sql": {
+        "name": "lms-test-sql-range",
+        "purpose": "VPC_PEERING",
+        "address_type": "INTERNAL",
+        "prefix_length": 16,
+        "network": "${google_compute_network.crm.id}"
+      }
+    },
+    "google_service_networking_connection": {
+      "sql": {
+        "network": "${google_compute_network.crm.id}",
+        "service": "servicenetworking.googleapis.com",
+        "reserved_peering_ranges": [
+          "${google_compute_global_address.sql.name}"
+        ],
+        "depends_on": [
+          "google_project_service.apis"
+        ]
+      }
+    },
+    "google_sql_database_instance": {
+      "crm": {
+        "name": "lms-test-postgres",
+        "database_version": "POSTGRES_16",
+        "region": "us-central1",
+        "deletion_protection": true,
+        "settings": {
+          "tier": "db-f1-micro",
+          "edition": "ENTERPRISE",
+          "availability_type": "ZONAL",
+          "disk_type": "PD_SSD",
+          "disk_size": 10,
+          "disk_autoresize": false,
+          "backup_configuration": {
+            "enabled": true,
+            "start_time": "07:00",
+            "backup_retention_settings": {
+              "retained_backups": 7
+            }
+          },
+          "ip_configuration": {
+            "ipv4_enabled": false,
+            "private_network": "${google_compute_network.crm.id}",
+            "ssl_mode": "ENCRYPTED_ONLY"
+          }
+        },
+        "depends_on": [
+          "google_service_networking_connection.sql"
+        ]
+      }
+    },
+    "google_sql_database": {
+      "crm": {
+        "name": "limitless_crm",
+        "instance": "${google_sql_database_instance.crm.name}"
+      }
+    },
+    "random_password": {
+      "db": {
+        "length": 40,
+        "special": false
+      },
+      "owner": {
+        "length": 32,
+        "special": false
+      }
+    },
+    "google_sql_user": {
+      "crm": {
+        "name": "lms_app",
+        "instance": "${google_sql_database_instance.crm.name}",
+        "password": "${random_password.db.result}"
+      }
+    },
+    "google_service_account": {
+      "app": {
+        "account_id": "lms-test-runtime",
+        "display_name": "Limitless CRM private testing",
+        "depends_on": [
+          "google_project_service.apis"
+        ]
+      },
+      "bootstrap": {
+        "account_id": "lms-test-bootstrap",
+        "display_name": "Limitless CRM one-time bootstrap"
+      }
+    },
+    "google_secret_manager_secret": {
+      "database": {
+        "secret_id": "lms-test-database-url",
+        "replication": {
+          "auto": {}
+        },
+        "depends_on": [
+          "google_project_service.apis"
+        ]
+      },
+      "owner": {
+        "secret_id": "lms-test-owner-password",
+        "replication": {
+          "auto": {}
+        },
+        "depends_on": [
+          "google_project_service.apis"
+        ]
+      }
+    },
+    "google_secret_manager_secret_version": {
+      "database": {
+        "secret": "${google_secret_manager_secret.database.id}",
+        "secret_data": "postgresql+psycopg://lms_app:${random_password.db.result}@${google_sql_database_instance.crm.private_ip_address}:5432/limitless_crm?sslmode=require"
+      },
+      "owner": {
+        "secret": "${google_secret_manager_secret.owner.id}",
+        "secret_data": "${random_password.owner.result}"
+      }
+    },
+    "google_secret_manager_secret_iam_member": {
+      "database": {
+        "secret_id": "${google_secret_manager_secret.database.id}",
+        "role": "roles/secretmanager.secretAccessor",
+        "member": "serviceAccount:${google_service_account.app.email}"
+      },
+      "bootstrap_database": {
+        "secret_id": "${google_secret_manager_secret.database.id}",
+        "role": "roles/secretmanager.secretAccessor",
+        "member": "serviceAccount:${google_service_account.bootstrap.email}"
+      },
+      "bootstrap_owner": {
+        "secret_id": "${google_secret_manager_secret.owner.id}",
+        "role": "roles/secretmanager.secretAccessor",
+        "member": "serviceAccount:${google_service_account.bootstrap.email}"
+      }
+    },
+    "google_artifact_registry_repository": {
+      "crm": {
+        "location": "us-central1",
+        "repository_id": "lms-test-images",
+        "format": "DOCKER",
+        "depends_on": [
+          "google_project_service.apis"
+        ]
+      }
+    },
+    "google_project_service_identity": {
+      "iap": {
+        "project": "limitless-crm-512612",
+        "service": "iap.googleapis.com",
+        "depends_on": [
+          "google_project_service.apis"
+        ],
+        "provider": "google-beta"
+      }
+    }
+  },
+  "output": {
+    "network": {
+      "value": "${google_compute_network.crm.name}"
+    },
+    "subnet": {
+      "value": "${google_compute_subnetwork.crm.name}"
+    },
+    "runtime_sa": {
+      "value": "${google_service_account.app.email}"
+    },
+    "bootstrap_sa": {
+      "value": "${google_service_account.bootstrap.email}"
+    },
+    "iap_sa": {
+      "value": "${google_project_service_identity.iap.email}"
+    },
+    "database_secret": {
+      "value": "${google_secret_manager_secret.database.secret_id}"
+    },
+    "owner_secret": {
+      "value": "${google_secret_manager_secret.owner.secret_id}"
+    },
+    "image_repository": {
+      "value": "us-central1-docker.pkg.dev/limitless-crm-512612/lms-test-images"
+    }
+  }
+}

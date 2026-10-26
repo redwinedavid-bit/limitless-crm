@@ -1,0 +1,198 @@
+Verified locally 2026-10-24 — CRM v1.7 technician clock / odometer update
+
+Full Python API regression suite: 28 passed, one test-client dependency deprecation warning.
+Coverage includes timer persistence across clients, idempotent clock-out, stale request safety,
+assignment/role restrictions, overlap checks, long-clock recovery after reassignment,
+legacy time/mileage preservation, odometer ordering, partial start readings,
+revision conflict checks, approval and approved cost totals across job financial views,
+calculated invoice quantity/tax, duplicate invoice prevention, draft removal,
+and immutable issued mileage charges.
+JavaScript syntax checks: technician and office review scripts passed.
+New database tables are additive. Existing time entries are not rewritten.
+PostgreSQL concurrency, actual mobile-browser UI and new container build/IAP checks
+remain to be performed in the private Google test deployment.
+This update has not been deployed; no cloud resources were created or changed in this coding turn.
+Existing resources created during the prior guided setup may continue accruing charges.
+
+
+Verified locally 2026-10-24 — CRM v1.8 owner pricing update
+Full Python/API suite: 32 passed, one existing test-client deprecation warning.
+Additional coverage: owner-only access (including denial for office employees),
+whole-percent targets, exact ceiling-to-cent minimum prices, slider changes without
+compounding, missing cost blockers, manual below-target export blocking,
+catalog uniqueness/revision checks/archive rules, historical snapshot preservation,
+quote floor enforcement, actual approved cost sources, sales tax separated from margin,
+itemized draft invoice output, mileage linkage/duplicate protection,
+linked invoice discount protection, cost changes requiring re-review,
+and refreshing the same draft instead of creating another invoice.
+JavaScript syntax checks passed. Pricing form element IDs, range step=1,
+and Quote/Invoice view options verified. No actual iPhone browser visual QA,
+PostgreSQL concurrency test, new cloud image build or deployment was performed.
+
+Verified locally 2026-10-24 — CRM v1.9 usability / profitability / customer tracking
+Full Python/API regression suite: 49 passed, one existing test-client dependency deprecation warning.
+Coverage includes private autosave authorization/revision conflicts/no publication;
+quick-call retries, customer/site and assignment validation; favorites and repair bundles;
+technician parts and customer/internal note separation in HTML/PDF snapshots;
+audited time correction review and cost reapproval; billing readiness and reported parts;
+loaded wage/payroll/workers-comp/benefit calculations including overtime and retained snapshots;
+minimum charges, freight/purchase tax, overhead allocation and saved-price preservation;
+explicit audited margin exceptions, exact approved-price floors and subsequent discount rejection;
+callback family costs counted once and missing/adjusted-cost coverage exclusions;
+provisional running-clock costs without rewriting a quote;
+customer recommendations/follow-up lifecycle and lifetime invoices/collections/payment-day basis;
+asset-scoped repeat call/callback flags, generated/classified maintenance exclusion,
+threshold overrides and rolling-window expiry; assigned/customer-scoped system selection.
+All root JavaScript files pass node --check. HTML ID checks pass for five new/updated screens.
+Four functional draft checks pass: concurrent edit during save, safe checkpoint,
+typing during initial draft load and protection after a revision conflict.
+New database tables are additive; no real customer history, cost assumptions or credentials
+were seeded into this package. No cloud resources were created or changed for this release.
+Not verified: real iPhone browser appearance, PostgreSQL concurrency, cloud build/container,
+IAP sign-in and deployed end-to-end workflow. These remain private deployment acceptance checks.
+Profit projections are provisional; actual margins exclude unknown costs and adjusted invoices
+until reconciled. Equipment-associated profitability groups overlap for multi-system calls.
+
+Verified locally 2026-10-24 — CRM v1.10 rollout tools / multi-site customers / team setup
+Full Python/API suite: 60 passed, one existing test-client dependency deprecation warning.
+Additional checks cover: two named service sites under one shared billing address;
+correct bill-to plus service location in invoice HTML/PDF generation;
+recommendation conversion with internal-scope protection, retries and quote floor checks;
+explicit additional-work customer authorization and technician price/cost redaction;
+call-scoped checklists and warranty permissions/revisions;
+exact receipt allocation replacing direct cost, capacity and duplicate-cost protection;
+reviewed payroll hours, export authorization and unapproved-time blockers;
+authenticated local photo upload/download and fail-closed durable configuration;
+mocked GCS create-only storage and mandatory private bucket settings;
+private notification snooze behavior; three separate logins with full admin versus
+assigned technician access and immediate app-session revocation on disable.
+All JavaScript files pass syntax checks; updated screen element IDs were checked.
+Existing four functional autosave checks pass.
+Service Terraform JSON adds exact additional tester identities, defaulting to an empty
+list. No IAM binding, account, bucket or other cloud resource was created/changed.
+Remaining acceptance checks: actual PostgreSQL/cloud build/IAP, both real employee
+Google identities and app accounts, phone UI, private object-storage connectivity,
+and database/file backup restoration. Real employee names/emails/passwords were not
+invented or provisioned. The runtime internal owner role supplies full admin access.
+
+Final v1.10 accountant export verification: 62 Python/API tests passed; one existing
+Starlette test-client deprecation warning. Two additional tests verify invoice date
+versus payment date, separation of reversals and drafts, undated record handling,
+unknown sales-tax fields left blank and CSV formula-text protection. Export is source
+data for accountant reconciliation, not a general ledger, tax return or Wave sync.
+JavaScript syntax and seven page/script binding checks passed; both Terraform files
+parse as JSON. Terraform provider validation / IAM apply was not performed.
+
+Verified locally 2026-10-24 — CRM v1.11 billing / field workflows
+Normal application build for mock-customer trials followed by real business use.
+Full Python API regression suite: 75 passed, one existing Starlette/httpx warning.
+Additional private equipment manual upload/link/technician-access test: 1 passed.
+JavaScript functional tests: private autosave (4 scenarios) and offline queue
+(conflict retention, same-user verification, successful sync and no repeated sync) passed.
+All application JavaScript syntax checks passed. Billing desk, Service office,
+customer preview and call workspace element IDs matched their scripts.
+Python tests cover default email previews/no provider calls, idempotent outbox,
+uncertain-send retry blocking and manual resolution, multi-invoice partial check
+allocation/unapplied balance/returned-check reversal, check export categorization,
+commercial snapshots/number reservations, finish-call blockers/waiting statuses,
+offline time replay/overlap/assignment/future validation, captured clock-out,
+photo replay/access, scoped service requests/revocation, stale quote approvals,
+customer-cost exclusion, opening balance validation/duplicates/sales exclusion,
+maintenance template validation and paid-reminder cancellation.
+Live Gmail was never contacted by tests; transport calls were mocked.
+No actual Cloud Run build/deployment, PostgreSQL concurrent-load test, mailbox
+OAuth connection, IAP mobile-device trial, scheduler, public customer portal,
+bucket creation or paid cloud mutation was performed. Real browser/mobile UI,
+IAP reauthentication, offline storage exhaustion and end-to-end printing/sending
+remain rollout checks. No real employees/customers were created in the deployable
+package; test databases, private uploads, state and secrets are excluded.
+
+
+Verified locally 2026-10-24 — CRM v1.12 Business at a glance
+Full Python/API regression suite: 83 passed; one existing Starlette/httpx warning.
+Additional matched-margin coverage/reconciliation test: 1 passed.
+JavaScript functional tests: overview rendering/filter controls/negative values,
+escaped invoice drilldown, one-day bars, plus existing autosave and offline queue
+checks all passed. All app JavaScript syntax checks passed. New page element IDs
+and all five date-period controls were checked against their script bindings.
+New API tests cover role/anonymous denial; Monday weeks/leap years/navigation;
+invoice issue-date revenue; future/undated invoices; Wave opening exclusion;
+historical as-of unpaid balances; unapplied checks/allocation/deposit/return
+cash deduplication; non-check reversals/refunds; PO receipt matching and dated
+return/credit behavior; local work-start date and odometer approval date; year
+buckets and empty future periods; matched call margin and exclusion after credit.
+No cloud deployment, paid resources or live account/email transactions occurred.
+Native mobile/browser visual verification and hosted PostgreSQL checks remain
+part of rollout. Source update is additive/read-only for dashboard reporting.
+
+
+Verified locally 2026-10-24 — CRM v1.13 standard proposal layout
+Full Python/API regression suite: 92 passed, one existing Starlette/httpx warning.
+Final pagination/deposit-label PDF subset: 8 passed. Existing autosave/offline,
+overview and new quote-editor JavaScript functional checks passed (4 Node tests).
+All application JavaScript syntax checks and quote-editor element bindings passed.
+PDF checks cover logo/image embedding, customer-safe output, exact odd-cent deposit
+splits, alternatives, fixed-deposit validation after repricing, revision history,
+accepted party/presentation snapshots, legacy/simple universal output, rejection
+of a nonstandard layout, role restrictions and long-scope pagination.
+Regular mock PDF (3 pages) and long-content stress PDF (8 pages) were rendered;
+all rendered pages were visually inspected against the retained reference design.
+The signature block stays together; short commercial blocks stay together; the
+cover is constrained to its own page so a validity/reference strip cannot spill.
+An initial disposable scratch SQLite test file failed integrity checks during a
+full run. A clean /tmp validation database completed all 92 tests and PRAGMA
+integrity_check returned ok. No live database was used or altered by validation.
+Hosted PostgreSQL and actual Cloud Run container/browser verification remain
+rollout steps. No cloud build, paid resource, real proposal email or Drive write
+was performed. Mock PDFs remain validation intermediates and are not real quotes.
+
+Verified locally 2026-10-24 — CRM v1.14 compact branded invoices
+Full Python regression suite: 95 passed, one existing Starlette/httpx deprecation warning.
+New invoice tests cover routine one-page fit, embedded original logo, exact tax/payment/credit
+figures, internal cost privacy, all 60 item descriptions retained over four pages, and an
+exceptionally long single description retained over four pages. Six, eight and ten routine
+line items also fit one page in local checks. All nine generated mock PDF pages rendered
+and visually inspected (one routine page, four item-overflow pages, four long-scope pages).
+No invoice business facts, authorization or Gmail configuration changes; saved outbox PDF
+snapshots remain unchanged. Includes examples/Invoice-Layout-Demo.pdf with mock data only.
+No cloud deployment, email sending or production-data changes performed.
+
+Invoice layout follow-up verified 2026-10-25: number moved from banner to Invoice Details;
+remittance moved below Notes / Terms. 17 targeted invoice and internal-operation tests
+passed, one existing dependency deprecation warning. Routine and all overflow mock PDF
+pages visually inspected. Full prior suite result above predates this small layout change.
+No cloud changes performed.
+
+
+# v1.15 workflow update
+
+## Changes
+- Single-page service call intake: existing/new customer, existing/new service address, problem, priority and optional technician/schedule.
+- Automatic job numbering; adding to an existing job is an optional collapsed section.
+- Customer list links directly to new calls and sites/billing.
+- Separate Team & access, Customer sites & billing, Office review and Exports views.
+- Pricing defaults no longer crowd everyday call intake.
+- Added missing customer/job read routes used by Operations, with permission checks.
+- Lost-response retries reuse the same request, preventing duplicate calls after a successful server commit.
+- Desktop and mobile layouts; unchanged technician workspace and customer-facing PDF layouts.
+
+## Validation — October 26, 2026
+99 Python/API tests passed; one pre-existing test-client deprecation warning.
+4 JavaScript regression tests passed; changed JavaScript syntax checks passed.
+Actual local Chromium checks passed: customer/site/call creation, technician assignment,
+existing customer with new site, committed request with dropped response and retry,
+customer action links, separate team/sites/exports views, desktop and 390px mobile,
+and no page JavaScript errors or failing API responses.
+Tests used a local SQLite database and sample records, not live customer data.
+
+## Deployment status and limits
+Prepared locally; not deployed. Current live version remains v1.14.
+Review the interactive HTML preview before an app-image upgrade. The preview uses
+sample data in memory and does not access the CRM or send messages.
+Retain the existing remote service/infra configuration and Terraform state. Build only
+the new app folder, then change the image digest in the existing deployment configuration.
+Do not rerun owner bootstrap. Verify the new revision, permissions, call creation and file
+uploads in the actual Google Cloud deployment before business use. PostgreSQL and IAP
+verification, email transport, backups and end-to-end production readiness are not
+established by these local tests. This is a focused office workflow update, not a redesign
+of every workspace.

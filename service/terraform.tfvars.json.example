@@ -1,0 +1,5 @@
+{
+  "image": "REPLACE_WITH_IMMUTABLE_IMAGE_DIGEST",
+  "tester_email": "REPLACE_WITH_YOUR_GOOGLE_ACCOUNT",
+  "iap_ready": false
+}

@@ -1,0 +1,41 @@
+# Trigger: owner-reviewed `release` branch only. Source repository root is this directory.
+steps:
+  - id: python-tests
+    name: python:3.12-slim
+    dir: app
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        python -m pip install --disable-pip-version-check -r requirements-dev.txt
+        python -m pytest tests -q
+        python -m unittest discover -s ../deploy/tests -v
+    env:
+      - DATABASE_URL=sqlite:////tmp/lms-ci.sqlite3
+  - id: javascript-tests
+    name: node:24-slim
+    dir: app
+    entrypoint: bash
+    args: ['-ceu', 'node --test tests/test_*.cjs; for file in *.js; do node --check "$$file"; done']
+    waitFor: ['-']
+  - id: build-image
+    name: gcr.io/cloud-builders/docker
+    args: ['build', '-t', 'us-central1-docker.pkg.dev/$PROJECT_ID/lms-test-images/crm:ci-$BUILD_ID', 'app']
+    waitFor: [python-tests, javascript-tests]
+  - id: push-image
+    name: gcr.io/cloud-builders/docker
+    args: ['push', 'us-central1-docker.pkg.dev/$PROJECT_ID/lms-test-images/crm:ci-$BUILD_ID']
+  - id: record-digest
+    name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    args:
+      - -ceu
+      - docker inspect --format='{{index .RepoDigests 0}}' 'us-central1-docker.pkg.dev/$PROJECT_ID/lms-test-images/crm:ci-$BUILD_ID' > /workspace/crm-image.txt
+  - id: release-existing-service
+    name: gcr.io/google.com/cloudsdktool/google-cloud-cli:stable
+    entrypoint: python3
+    args: ['deploy/release.py', '/workspace/crm-image.txt', '$BRANCH_NAME']
+options:
+  logging: CLOUD_LOGGING_ONLY
+serviceAccount: projects/limitless-crm-512612/serviceAccounts/lms-crm-build@limitless-crm-512612.iam.gserviceaccount.com
+timeout: 1800s

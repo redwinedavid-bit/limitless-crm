@@ -1,0 +1,251 @@
+{
+  "terraform": {
+    "required_version": ">= 1.6",
+    "required_providers": {
+      "google": {
+        "source": "hashicorp/google",
+        "version": "~> 7.27"
+      },
+      "random": {
+        "source": "hashicorp/random",
+        "version": "~> 3.7"
+      }
+    }
+  },
+  "provider": {
+    "google": {
+      "project": "limitless-crm-512612",
+      "region": "us-central1"
+    }
+  },
+  "variable": {
+    "image": {
+      "type": "string",
+      "description": "Built CRM image pinned to sha256 digest",
+      "validation": {
+        "condition": "${can(regex(\"@sha256:[a-f0-9]{64}$\", var.image))}",
+        "error_message": "Use an immutable image digest."
+      }
+    },
+    "tester_email": {
+      "type": "string",
+      "description": "Exact Google account approved for owner-only private testing"
+    },
+    "iap_ready": {
+      "type": "bool",
+      "default": false,
+      "description": "True only after organization membership or custom IAP OAuth configuration is verified"
+    },
+    "additional_tester_emails": {
+      "type": "list(string)",
+      "default": [],
+      "description": "Exact Google emails for the additional admin and technician. No domain-wide access."
+    }
+  },
+  "data": {
+    "terraform_remote_state": {
+      "infra": {
+        "backend": "local",
+        "config": {
+          "path": "../infra/terraform.tfstate"
+        }
+      }
+    },
+    "google_project": {
+      "current": {
+        "project_id": "limitless-crm-512612"
+      }
+    }
+  },
+  "locals": {
+    "infra": "${data.terraform_remote_state.infra.outputs}",
+    "host": "lms-crm-test-${data.google_project.current.number}.us-central1.run.app"
+  },
+  "resource": {
+    "google_cloud_run_v2_service": {
+      "crm": {
+        "name": "lms-crm-test",
+        "location": "us-central1",
+        "deletion_protection": true,
+        "ingress": "INGRESS_TRAFFIC_ALL",
+        "iap_enabled": true,
+        "invoker_iam_disabled": false,
+        "template": {
+          "service_account": "${local.infra.runtime_sa}",
+          "max_instance_request_concurrency": 8,
+          "scaling": {
+            "min_instance_count": 0,
+            "max_instance_count": 1
+          },
+          "vpc_access": {
+            "network_interfaces": [
+              {
+                "network": "${local.infra.network}",
+                "subnetwork": "${local.infra.subnet}"
+              }
+            ],
+            "egress": "PRIVATE_RANGES_ONLY"
+          },
+          "containers": [
+            {
+              "image": "${var.image}",
+              "ports": {
+                "container_port": 8080
+              },
+              "resources": {
+                "limits": {
+                  "cpu": "1",
+                  "memory": "512Mi"
+                },
+                "cpu_idle": true
+              },
+              "env": [
+                {
+                  "name": "APP_ENV",
+                  "value": "staging"
+                },
+                {
+                  "name": "APP_PUBLIC_URL",
+                  "value": "https://${local.host}"
+                },
+                {
+                  "name": "ALLOWED_HOSTS",
+                  "value": "${local.host}"
+                },
+                {
+                  "name": "COOKIE_SECURE",
+                  "value": "1"
+                },
+                {
+                  "name": "LMS_DURABLE_UPLOADS",
+                  "value": "0"
+                },
+                {
+                  "name": "DATABASE_URL",
+                  "value_source": {
+                    "secret_key_ref": {
+                      "secret": "${local.infra.database_secret}",
+                      "version": "1"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "lifecycle": {
+          "precondition": [
+            {
+              "condition": "${var.iap_ready}",
+              "error_message": "Verify IAP organization/OAuth setup first; do not publish without IAP."
+            }
+          ]
+        }
+      }
+    },
+    "google_cloud_run_v2_service_iam_binding": {
+      "iap_only": {
+        "project": "limitless-crm-512612",
+        "location": "us-central1",
+        "name": "${google_cloud_run_v2_service.crm.name}",
+        "role": "roles/run.invoker",
+        "members": [
+          "serviceAccount:${local.infra.iap_sa}"
+        ]
+      }
+    },
+    "google_iap_web_cloud_run_service_iam_binding": {
+      "testers": {
+        "project": "limitless-crm-512612",
+        "location": "us-central1",
+        "cloud_run_service_name": "${google_cloud_run_v2_service.crm.name}",
+        "role": "roles/iap.httpsResourceAccessor",
+        "members": "${distinct(concat([format(\"user:%s\", var.tester_email)], [for email in var.additional_tester_emails : format(\"user:%s\", email)]))}"
+      }
+    },
+    "google_cloud_run_v2_job": {
+      "bootstrap": {
+        "name": "lms-crm-test-bootstrap",
+        "location": "us-central1",
+        "deletion_protection": true,
+        "template": {
+          "template": {
+            "service_account": "${local.infra.bootstrap_sa}",
+            "max_retries": 0,
+            "timeout": "300s",
+            "vpc_access": {
+              "network_interfaces": [
+                {
+                  "network": "${local.infra.network}",
+                  "subnetwork": "${local.infra.subnet}"
+                }
+              ],
+              "egress": "PRIVATE_RANGES_ONLY"
+            },
+            "containers": [
+              {
+                "image": "${var.image}",
+                "command": [
+                  "python",
+                  "-m",
+                  "server.bootstrap_cloud_owner"
+                ],
+                "resources": {
+                  "limits": {
+                    "cpu": "1",
+                    "memory": "512Mi"
+                  }
+                },
+                "env": [
+                  {
+                    "name": "APP_ENV",
+                    "value": "staging"
+                  },
+                  {
+                    "name": "APP_PUBLIC_URL",
+                    "value": "https://${local.host}"
+                  },
+                  {
+                    "name": "ALLOWED_HOSTS",
+                    "value": "${local.host}"
+                  },
+                  {
+                    "name": "COOKIE_SECURE",
+                    "value": "1"
+                  },
+                  {
+                    "name": "LMS_DURABLE_UPLOADS",
+                    "value": "0"
+                  },
+                  {
+                    "name": "DATABASE_URL",
+                    "value_source": {
+                      "secret_key_ref": {
+                        "secret": "${local.infra.database_secret}",
+                        "version": "1"
+                      }
+                    }
+                  },
+                  {
+                    "name": "LMS_BOOTSTRAP_PASSWORD",
+                    "value_source": {
+                      "secret_key_ref": {
+                        "secret": "${local.infra.owner_secret}",
+                        "version": "1"
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    }
+  },
+  "output": {
+    "testing_url": {
+      "value": "https://${local.host}"
+    }
+  }
+}

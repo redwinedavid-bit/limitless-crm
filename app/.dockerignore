@@ -1,0 +1,26 @@
+.git
+__pycache__/
+.pytest_cache/
+*.pyc
+*.sqlite
+*.sqlite3
+*.db
+*.zip
+private_uploads/
+data/
+tests/
+.env*
+*.pdf
+*.png
+*.jpeg
+*.jpg
+*.heic
+*.webp
+secrets/
+private_field_uploads/
+private_*/
+*.pem
+*.key
+
+# Retained proposal-brand asset is required inside the image.
+!server/proposal_assets/limitless_logo.png

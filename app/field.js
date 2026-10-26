@@ -1,0 +1,63 @@
+'use strict';
+const $=id=>document.getElementById(id);
+const encode=s=>String(s??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+const qs=new URLSearchParams(location.search),wo=qs.get('work_order');
+let state=null,assets=[],signatureDrawn=false;
+async function api(url,opts={}){const r=await fetch(url,opts);const text=await r.text();let data;try{data=JSON.parse(text)}catch{data={detail:text}}if(!r.ok)throw Error(typeof data.detail==='string'?data.detail:'Request failed ('+r.status+')');return data}
+function pop(message){$('toast').textContent=message;$('toast').style.display='block';setTimeout(()=>$('toast').style.display='none',3900)}
+function error(e){$('alert').textContent=e.message||String(e);$('alert').classList.remove('hidden');$('alert').scrollIntoView({behavior:'smooth',block:'start'})}
+function disableSigned(signed){for(const id of ['concern','diagnosis','workPerformed','recommendations','followUp','saveReport','parameter','readingValue','readingUnit','readingNote','addReading','conditionRating','conditionNote','saveCondition','caption','photoAsset','cameraFile','libraryFile','uploadPhoto','signerName','signerTitle','clearSignature','acknowledge','signReport'])$(id).disabled=signed;if(signed){$('signedNotice').classList.remove('hidden');$('signedNotice').textContent='Signed by '+state.signer+' at '+state.signed_at+'. This service report is locked.'}}
+async function load(){if(!wo){error(Error('A work order link is required. Open a job from the Technician portal.'));return}try{let current=await api('/api/auth/me');$('user').textContent=current.name;state=await api('/api/field/work-orders/'+encodeURIComponent(wo));assets=state.report.assets;
+  const r=state.report;$('workTitle').textContent=r.summary;$('jobNumber').textContent=r.job_number;$('customerLine').textContent=[r.customer,r.location,r.address].filter(Boolean).join(' · ');$('statusBadge').textContent=state.signed?'Signed & Complete':'In Progress';$('pdfLink').href='/api/field/work-orders/'+encodeURIComponent(wo)+'/report.pdf';
+  $('concern').value=r.customer_concern||'';$('diagnosis').value=r.diagnosis||'';$('workPerformed').value=r.work_performed||'';$('recommendations').value=r.recommendations||'';$('followUp').checked=!!r.follow_up_required;
+  $('assetPick').innerHTML=assets.length?assets.map(a=>`<option value="${encode(a.id)}">${encode(a.tag)} · ${encode(a.make)} ${encode(a.model)}</option>`).join(''):'<option value="">No equipment linked (office must link it first)</option>';
+  $('parameter').dispatchEvent(new Event('change'));
+  $('photoAsset').innerHTML='<option value="">Not tied to specific asset</option>'+assets.map(a=>`<option value="${encode(a.id)}">${encode(a.tag)}</option>`).join('');$('addReading').disabled=!assets.length;
+  refreshCondition();loadHistory();
+  $('readingList').innerHTML=r.readings.length?r.readings.map(x=>`<div class="reading"><div class="row"><strong>${encode(x.asset_tag)}: ${encode(x.parameter)}</strong><b>${encode(x.value)} ${encode(x.unit)}</b></div><div class="muted">${encode(x.note)}</div>${!state.signed?`<button class="outline" style="margin-top:8px" onclick="removeReading('${encode(x.id)}')">Remove</button>`:''}</div>`).join(''):'No readings recorded';
+  $('photoList').innerHTML=state.photos.length?state.photos.map(p=>`<div class="photo"><b>${encode(p.caption||p.filename)}</b><img loading="lazy" src="${encode(p.download_url)}" alt="Field photograph"><a href="${encode(p.download_url)}" target="_blank" rel="noopener">Open photo</a></div>`).join(''):'No photographs attached';
+  disableSigned(state.signed);$('alert').classList.add('hidden');
+}catch(e){error(e)}}
+function refreshCondition(){
+  const e=$('assetPick').value;
+  const condition=(state?.report?.conditions||[]).find(c=>c.equipment_id===e);
+  $('conditionRating').value=condition?.rating||'Not assessed';
+  $('conditionNote').value=condition?.note||'';
+}
+function dateLabel(s){if(!s)return 'Unknown date';const d=new Date(s);return Number.isNaN(d.valueOf())?s:d.toLocaleDateString(undefined,{year:'numeric',month:'short',day:'numeric'});}
+async function loadHistory(){
+  const assetId=$('assetPick').value;
+  if(!assetId){$('historyPreview').textContent='No equipment linked to this work order yet.';$('historyVisits').textContent='No equipment selected';return}
+  const name=assets.find(a=>a.id===assetId)?.tag||'Selected equipment';
+  $('historyPreview').textContent='Loading prior equipment records…';
+  try {
+    const data=await api('/api/field/work-orders/'+encodeURIComponent(wo)+'/equipment/'+encodeURIComponent(assetId)+'/history');
+    $('historyAsset').textContent=name+' · '+(data.equipment.manufacturer||'')+' '+(data.equipment.model||'')+' · '+data.visits.length+' service visit(s)'+(data.has_more?' (latest 40 shown)':'');
+    const earlier=data.visits.filter(v=>v.work_order_id!==wo);
+    const latest=earlier.find(v=>v.readings.length||v.condition||v.findings||v.work_performed)||earlier[0];
+    $('historyPreview').innerHTML=latest?`<b>Last previous visit: ${encode(dateLabel(latest.date))}</b> · ${encode(latest.job_number)}${latest.condition?' · Condition: '+encode(latest.condition.rating):''}<div style="margin-top:4px">${encode(latest.readings.slice(0,3).map(r=>r.parameter+': '+r.value+' '+r.unit).join(' · ')||latest.summary)}</div>`:'No previous service history for this equipment.';
+    $('historyTrends').innerHTML=data.trends.length?data.trends.map(t=>`<div class="metric-card">${encode(t.parameter)}<strong>${encode(t.latest)} ${encode(t.unit)}</strong><span>${t.previous===null?'First reading':'Previous: '+encode(t.previous)+' '+encode(t.unit)} · ${encode(t.samples)} recorded</span></div>`).join(''):'<p class="muted">No numeric readings recorded yet.</p>';
+    $('historyVisits').innerHTML=data.visits.length?data.visits.map(v=>`<article class="history-entry"><h3>${encode(dateLabel(v.date))} · ${encode(v.job_number)}${v.work_order_id===wo?' (current visit)':''}</h3><div class="muted">${encode(v.summary)} · ${encode(v.status)}</div>${v.condition?`<p><b>Condition: ${encode(v.condition.rating)}</b> — ${encode(v.condition.note)}</p>`:''}${v.readings.length?`<h4>Measurements</h4>${v.readings.map(r=>`<div class="row small"><span>${encode(r.parameter)}${r.note?' · '+encode(r.note):''}</span><b>${encode(r.value)} ${encode(r.unit)}</b></div>`).join('')}`:''}${v.findings?`<p class="small"><b>Job findings:</b> ${encode(v.findings)}</p>`:''}${v.work_performed?`<p class="small"><b>Work performed:</b> ${encode(v.work_performed)}</p>`:''}${v.recommendations?`<p class="small"><b>Follow-up:</b> ${encode(v.recommendations)}</p>`:''}${v.pm_inspections.length?`<p class="small"><b>PM inspection:</b> ${v.pm_inspections.length} checklist(s) completed</p>`:''}${v.photos.length?`<h4>Equipment photos</h4>${v.photos.map(p=>`<div><a target="_blank" rel="noopener" href="/api/field/work-orders/${encodeURIComponent(wo)}/equipment/${encodeURIComponent(assetId)}/photos/${encodeURIComponent(p.id)}">${encode(p.caption||'Equipment photograph')}</a></div>`).join('')}`:''}</article>`).join(''):'<p>No previous visits recorded.</p>';
+  }catch(e){$('historyPreview').textContent='Unable to load equipment history: '+e.message;$('historyVisits').textContent='History unavailable';}
+}
+$('assetPick').addEventListener('change',()=>{refreshCondition();loadHistory();});
+$('viewHistory').onclick=async()=>{await loadHistory();selectedPanel('history');};
+$('saveCondition').onclick=async()=>{try{const assetId=$('assetPick').value;if(!assetId)throw Error('Select linked equipment');await api('/api/field/work-orders/'+encodeURIComponent(wo)+'/equipment/'+encodeURIComponent(assetId)+'/condition',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({rating:$('conditionRating').value,note:$('conditionNote').value})});await load();selectedPanel('readings');pop('Equipment condition saved to its permanent history')}catch(e){error(e)}};
+const suggestedUnit = s=>/amp|current/i.test(s)?'A':/voltage/i.test(s)?'V':/capacitance/i.test(s)?'µF':/insulation resistance/i.test(s)?'MΩ':/resistance/i.test(s)?'Ω':/pressure/i.test(s)?'psig':/superheat|subcool|temperature/i.test(s)?'°F':/humidity/i.test(s)?'% RH':/static/i.test(s)?'in. w.c.':/airflow/i.test(s)?'CFM':/water flow/i.test(s)?'GPM':null;
+$('parameter').addEventListener('change',()=>{const unit=suggestedUnit($('parameter').value);if(unit)$('readingUnit').value=unit});
+function selectedPanel(which){document.querySelectorAll('.panel').forEach(x=>x.classList.toggle('hidden',x.id!==which));document.querySelectorAll('.menu button').forEach(x=>x.classList.toggle('active',x.dataset.tab===which))}
+document.querySelectorAll('.menu button').forEach(b=>b.addEventListener('click',()=>selectedPanel(b.dataset.tab)));
+const json=(body)=>({method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+function reportData(){return {customer_concern:$('concern').value,diagnosis:$('diagnosis').value,work_performed:$('workPerformed').value,recommendations:$('recommendations').value,follow_up_required:$('followUp').checked}}
+async function saveReport(show=true){try{await api('/api/field/work-orders/'+wo,json(reportData()));if(show)pop('Field report saved');return true}catch(e){error(e);return false}}
+$('saveReport').onclick=()=>saveReport();$('refresh').onclick=load;
+$('addReading').onclick=async()=>{try{if(!$('assetPick').value)throw Error('Office must link equipment to this work order');if(!$('readingValue').value)throw Error('Enter a measured value');await api('/api/field/work-orders/'+wo+'/readings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({equipment_id:$('assetPick').value,parameter:$('parameter').value,value:$('readingValue').value,unit:$('readingUnit').value,note:$('readingNote').value})});$('readingValue').value='';await load();selectedPanel('readings');pop('Measurement saved')}catch(e){error(e)}};
+window.removeReading=async(id)=>{if(!confirm('Remove this unsigned reading?'))return;try{await api('/api/field/work-orders/'+wo+'/readings/'+id,{method:'DELETE'});await load();selectedPanel('readings');pop('Reading removed')}catch(e){error(e)}};
+$('uploadPhoto').onclick=async()=>{try{const file=$('cameraFile').files[0]||$('libraryFile').files[0];if(!file)throw Error('Choose a photograph or use your camera');const body=new FormData();body.append('file',file);body.append('caption',$('caption').value);if($('photoAsset').value)body.append('equipment_id',$('photoAsset').value);await api('/api/field/work-orders/'+wo+'/photos',{method:'POST',body});$('cameraFile').value='';$('libraryFile').value='';$('caption').value='';await load();selectedPanel('photos');pop('Photo uploaded')}catch(e){error(e)}};
+function setupCanvas(){const c=$('signaturePad'),rect=c.getBoundingClientRect(),scale=Math.min(devicePixelRatio||1,2);c.width=Math.max(320,Math.round(rect.width*scale));c.height=Math.round(166*scale);const ctx=c.getContext('2d');ctx.lineWidth=2.7*scale;ctx.lineCap='round';ctx.lineJoin='round';ctx.strokeStyle='#16383e';ctx.fillStyle='#fff';ctx.fillRect(0,0,c.width,c.height);let active=false;
+function loc(e){const b=c.getBoundingClientRect();return{x:(e.clientX-b.left)*c.width/b.width,y:(e.clientY-b.top)*c.height/b.height}}
+c.addEventListener('pointerdown',e=>{if(c.disabled||state?.signed)return;active=true;c.setPointerCapture(e.pointerId);const p=loc(e);ctx.beginPath();ctx.moveTo(p.x,p.y);ctx.lineTo(p.x+.01,p.y+.01);ctx.stroke();signatureDrawn=true});c.addEventListener('pointermove',e=>{if(!active)return;const p=loc(e);ctx.lineTo(p.x,p.y);ctx.stroke()});for(const ev of ['pointerup','pointercancel'])c.addEventListener(ev,()=>active=false);$('clearSignature').onclick=()=>{ctx.fillStyle='#fff';ctx.fillRect(0,0,c.width,c.height);signatureDrawn=false};
+window.signaturePNG=()=>c.toDataURL('image/png');}
+setupCanvas();
+$('signReport').onclick=async()=>{try{if(!signatureDrawn)throw Error('Ask the customer to draw their signature');if(!$('acknowledge').checked)throw Error('Confirm the customer acknowledgment');if(!$('signerName').value.trim())throw Error('Enter the customer name');if(!await saveReport(false))return;const confirmed=confirm('Save customer acknowledgment and lock this service report? Further changes will require a new work order.');if(!confirmed)return;await api('/api/field/work-orders/'+wo+'/signature',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({signer_name:$('signerName').value,signer_title:$('signerTitle').value,signature_data:window.signaturePNG(),acknowledgment:true})});await load();selectedPanel('signature');pop('Customer acknowledgment saved; report locked')}catch(e){error(e)}};
+load();

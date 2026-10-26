@@ -1,0 +1,6 @@
+-r requirements.txt
+# PDF structure/text verification for proposal-template regression tests.
+pypdf==6.10.0
+
+# FastAPI TestClient dependency used in clean CI builds.
+httpx==0.28.1

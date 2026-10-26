@@ -1,0 +1,3 @@
+Adapted retained limitless-proposal generator; source SHA256 6486b4530d665ab8923e83fa3b4f6271528bb5b3dff13f7d4f8cad515be05476
+Logo extracted without redrawing from its reference-proposal.pdf, page 1 embedded image (900 x 308). Original template assets unchanged.
+CRM adaptations: explicit deposit schedules, alternatives, preserved signature block and packaged DejaVu fonts/license. No source customer/project facts are default quote content.

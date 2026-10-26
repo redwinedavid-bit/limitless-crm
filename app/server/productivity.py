@@ -207,9 +207,9 @@ def attach_productivity(app):
     @app.get('/calls')
     def calls_page(user=Depends(m.current_user)):
         if user['role']!='owner' and 'manage_jobs' not in m.ROLE_SCOPES.get(user['role'],set()):raise HTTPException(403,'Office call access required')
-        return FileResponse(m.ROOT/'calls.html')
+        return FileResponse(m.ROOT/'calls.html',headers={'Cache-Control':'private, no-cache'})
     @app.get('/calls.js')
-    def calls_script(user=Depends(m.current_user)):return FileResponse(m.ROOT/'calls.js',media_type='application/javascript')
+    def calls_script(user=Depends(m.current_user)):return FileResponse(m.ROOT/'calls.js',media_type='application/javascript',headers={'Cache-Control':'private, no-cache'})
     @app.get('/calls/{wo_id}')
     def call_page(wo_id:str,user=Depends(m.current_user)):
         with Session(m.engine) as db:access(db,wo_id,user)

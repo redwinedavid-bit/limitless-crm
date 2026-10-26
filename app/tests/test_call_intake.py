@@ -71,3 +71,20 @@ def test_office_lookup_routes_populate_forms_without_technician_access(setup_clo
     assert any(c['id']==row['customerId'] for c in customers.json())
     assert clients['tech'].get('/api/customers').status_code==403
     assert clients['tech'].get('/api/jobs').status_code==403
+
+
+def test_call_page_uses_versioned_script_and_revalidates_cache(setup_clock):
+    import re
+    owner = setup_clock[0]['owner']
+    page = owner.get('/calls')
+    assert page.status_code == 200
+    assert page.headers['cache-control'] == 'private, no-cache'
+    script_url = re.search(r'<script src="(/calls\.js\?v=[^"]+)"', page.text).group(1)
+    script = owner.get(script_url)
+    assert script.status_code == 200
+    assert script.headers['cache-control'] == 'private, no-cache'
+    assert 'No calls to show' in script.text
+    # The script and page must agree about every directly referenced element.
+    ids = set(re.findall(r'\bid="([^"]+)"', page.text))
+    referenced = set(re.findall(r"el\('([^']+)'\)", script.text))
+    assert referenced <= ids, referenced - ids

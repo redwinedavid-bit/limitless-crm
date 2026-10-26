@@ -31,6 +31,8 @@ def payload(db,q):
 
 def attach_job_hub(app):
     m.Base.metadata.create_all(m.engine)
+    @app.get('/invoice-dashboard.js')
+    def invoice_script():return FileResponse(m.ROOT/'invoice-dashboard.js',media_type='application/javascript',headers={'Cache-Control':'private, no-cache'})
     @app.get('/proposal-dashboard.js')
     def script():return FileResponse(m.ROOT/'proposal-dashboard.js',media_type='application/javascript',headers={'Cache-Control':'private, no-cache'})
     @app.get('/api/admin/proposal-pipeline')

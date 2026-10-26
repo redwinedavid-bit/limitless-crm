@@ -58,7 +58,7 @@
   await Promise.all([notes(),parts(),timeHistory()]);
   if(state.role==='owner'){
    by('customer-history-link').href='/profitability?customer='+encodeURIComponent(state.customer.id);by('back').href='/calls';by('back').textContent='← Calls';by('admin-links').hidden=false;by('admin-readiness').hidden=false;await readiness();
-   by('admin-pricing').hidden=false;by('tab-review').textContent='Review & Bill';
+   by('call-time-review').href='/time-review?call='+encodeURIComponent(wo);by('admin-pricing').hidden=false;by('tab-review').textContent='Review & Bill';
    by('quote-call').href='/call-pricing?call='+encodeURIComponent(wo)+'&mode=estimate';
    by('invoice-call').href='/call-pricing?call='+encodeURIComponent(wo)+'&mode=actual';
   }

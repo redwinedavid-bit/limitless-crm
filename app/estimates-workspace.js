@@ -24,3 +24,6 @@ $('payment-50').onclick=()=>{$('deposit-percent').value='50';$('deposit-amount')
 $('payment-net30').onclick=()=>{$('deposit-percent').value='';$('deposit-amount').value='';$('create').elements.payment_terms.value='Net 30';};
 loadPresentation({template:'limitless'});
 load();
+
+
+(async()=>{const id=new URLSearchParams(location.search).get("proposal");if(!id)return;try{const q=await req("/api/estimates/advanced/"+encodeURIComponent(id));putToEditor(q);note(q.status==="Approved"?"Accepted proposal — open the linked job from the dashboard.":"Proposal loaded. Record customer authorization below when accepted.");}catch(e){note(e.message);}})();

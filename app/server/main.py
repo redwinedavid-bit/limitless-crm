@@ -741,6 +741,8 @@ def technician_script(): return FileResponse(ROOT/'tech.js',media_type='applicat
 
 @app.get('/')
 def index(): return FileResponse(ROOT/'index.html')
+@app.get('/job-activity.js')
+def job_activity_script(): return FileResponse(ROOT/'job-activity.js',media_type='application/javascript',headers={'Cache-Control':'private, no-cache'})
 @app.get('/app.js')
 def app_script(): return FileResponse(ROOT/'app.js',media_type='application/javascript')
 @app.get('/styles.css')
@@ -1501,3 +1503,7 @@ attach_customer_workflows(app)
 
 from .business_overview import attach_overview
 attach_overview(app)
+
+
+from .job_hub import attach_job_hub
+attach_job_hub(app)

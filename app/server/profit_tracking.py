@@ -74,6 +74,9 @@ class BurdenIn(BaseModel):
     mileage_rate:Decimal=Field(default=ZERO,ge=0,max_digits=8,decimal_places=3)
     expected_revision:int=Field(default=0,ge=0)
 
+class PurchasingDesignatorIn(BaseModel):
+    prefix:str=Field(pattern=r'^(DR|AR|DB)$')
+
 class CategoryIn(BaseModel):
     job_type:Literal['Service','Maintenance','Installation','Emergency','Warranty']='Service'
     original_call_id:str|None=None
@@ -352,6 +355,10 @@ def customer_history(db,customer):
 
 def attach_profit_tracking(app):
     m.Base.metadata.create_all(m.engine)
+    @app.get('/employee-costs')
+    def employee_costs_page(user=Depends(p.owner)):return FileResponse(m.ROOT/'employee-costs.html',headers={'Cache-Control':'private, no-cache'})
+    @app.get('/employee-costs.js')
+    def employee_costs_script(user=Depends(p.owner)):return FileResponse(m.ROOT/'employee-costs.js',media_type='application/javascript',headers={'Cache-Control':'private, no-cache'})
     @app.get('/profitability')
     def page(user=Depends(p.owner)):return FileResponse(m.ROOT/'profitability.html')
     @app.get('/profitability.js')
@@ -379,16 +386,26 @@ def attach_profit_tracking(app):
     def labor_profiles(user=Depends(p.owner)):
         with Session(m.engine) as db:
             result=[]
-            for tech in db.scalars(select(m.User).where(m.User.role=='technician')):
+            for tech in db.scalars(select(m.User).where(m.User.active==True).order_by(m.User.display_name)):
                 row=db.get(LaborBurden,tech.id);v=json.loads(row.values_json) if row else None
-                result.append({'technician_id':tech.id,'name':tech.display_name,'revision':row.revision if row else 0,'values':v,
+                result.append({'technician_id':tech.id,'name':tech.display_name,'username':tech.username,'role':tech.role,'po_prefix':tech.po_prefix,'revision':row.revision if row else 0,'values':v,
                     'loaded_regular_hourly_cost':amount(dec(v['base_wage'])*(1+(dec(v['payroll_percent'])+dec(v['workers_comp_percent']))/100)+dec(v['benefits_per_hour'])) if v else None})
             return result
+    @app.put('/api/admin/employees/{employee_id}/po-designator')
+    def assign_po_designator(employee_id:str,data:PurchasingDesignatorIn,user=Depends(m.require('manage_users'))):
+        with Session(m.engine) as db:
+            db.scalars(select(m.User).order_by(m.User.id).with_for_update()).all()
+            employee=db.get(m.User,employee_id)
+            if not employee or not employee.active:raise HTTPException(422,'Select an active employee')
+            if employee.po_prefix and employee.po_prefix!=data.prefix:raise HTTPException(409,'An existing PO designator cannot be reassigned here; its purchase history must remain with the employee')
+            other=db.scalar(select(m.User.id).where(m.User.po_prefix==data.prefix,m.User.id!=employee_id))
+            if other:raise HTTPException(409,'That PO designator already belongs to another account')
+            employee.po_prefix=data.prefix;m.log(db,'ASSIGN_PO_DESIGNATOR','user',employee_id,data.prefix);db.commit();return {'saved':True,'po_prefix':data.prefix}
     @app.put('/api/admin/labor-burden/{technician_id}')
     def save_burden(technician_id:str,data:BurdenIn,user=Depends(p.owner)):
         with Session(m.engine) as db:
             tech=db.get(m.User,technician_id)
-            if not tech or tech.role!='technician':raise HTTPException(422,'Select a technician')
+            if not tech or not tech.active:raise HTTPException(422,'Select an active employee')
             m.lock_time_user(db,technician_id)
             row=db.get(LaborBurden,technician_id)
             if data.expected_revision!=(row.revision if row else 0):raise HTTPException(409,'Labor profile changed; reload before saving')
@@ -485,3 +502,4 @@ def attach_profit_tracking(app):
             row=db.scalar(select(CustomerFollowUp).where(CustomerFollowUp.id==follow_id,CustomerFollowUp.customer_id==customer_id).with_for_update())
             if not row:raise HTTPException(404,'Follow-up not found')
             return save_follow(db,customer_id,data,user,row)
+

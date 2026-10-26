@@ -1,7 +1,7 @@
 (async()=>{
  const by=id=>document.getElementById(id),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
  const wo=decodeURIComponent(location.pathname.split('/').pop()),base='/api/calls/'+encodeURIComponent(wo);
- let state,clock,offset=0,mileRevision=0,noteDraft,partRequest=crypto.randomUUID(),noteRequest=crypto.randomUUID();
+ let state,clock,offset=0,mileRevision=0,noteDraft,partRequest=crypto.randomUUID(),noteRequest=crypto.randomUUID(),poRequest=crypto.randomUUID();
  const msg=t=>by('message').textContent=t;
  const tabs=[...document.querySelectorAll('[data-panel]')];
  function showPanel(key){
@@ -40,6 +40,14 @@
  async function readiness(){if(state.role!=='owner')return;const s=await api(base+'/workspace');state.readiness=s.readiness;by('ready-state').innerHTML=`<p><strong>${esc(s.readiness.stage)}</strong></p>`+s.readiness.blockers.map(b=>`<p class="alert">• ${esc(b)}</p>`).join('')+(s.readiness.invoice_number?`<p>Invoice: ${esc(s.readiness.invoice_number)} · ${esc(s.readiness.invoice_status)}</p>`:'');by('confirm-parts').disabled=!s.readiness.pricing_revision;}
  try{
   state=await api(base+'/workspace');const me=await api('/api/auth/me');state.user_id=me.id;clock=state.active_clock;offset=Date.parse(state.server_now)-Date.now();
+  by('call-po-context').textContent='Job '+state.call.job_number+' — '+state.call.summary+'. This PO will belong to this job only.';
+  by('call-po-purchases').href='/purchasing?job='+encodeURIComponent(state.call.job_number);
+  const canBuy=['DR','AR','DB'].includes(me.po_prefix);by('call-po-form').hidden=!canBuy;
+  by('call-po-permission').textContent=canBuy?'Your '+me.po_prefix+' PO number is assigned when you create the order.':'An admin must assign your PO designator in Employee Costs before you can create a PO.';
+  by('call-po-form').onsubmit=e=>{e.preventDefault();act(by('call-po-submit'),async()=>{
+   const po=await api(base+'/purchase-orders','POST',{request_id:poRequest,vendor:by('call-po-vendor').value,description:by('call-po-description').value,amount:by('call-po-amount').value});
+   poRequest=crypto.randomUUID();by('call-po-form').reset();by('call-po-result').textContent='Issued '+po.number+' to '+po.vendor+' for job '+po.job_number+'.';msg('Purchase Order '+po.number+' created.');
+  });};
   by('title').textContent=state.call.job_number+' · '+state.call.summary;by('customer').textContent=state.customer.name+(state.location?.name?' · '+state.location.name:'');by('address').textContent=state.location?.address||'No address recorded';by('status').value=state.call.status;by('field-form').href='/field?work_order='+encodeURIComponent(wo);
   const phone=(state.location?.phone||state.customer.phone).replace(/[^+\d]/g,'');by('contact-actions').innerHTML=(phone?`<a class="action" href="tel:${esc(phone)}">Call customer</a>`:'')+(state.location?.address?`<a class="action" href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(state.location.address)}" target="_blank" rel="noopener noreferrer">Directions</a>`:'');
   by('equipment').innerHTML=state.equipment.map(a=>`<p><strong>${esc(a.asset_tag)}</strong> · ${esc(a.manufacturer)} ${esc(a.model)}<br>Serial: ${esc(a.serial)}</p>`).join('')||'No equipment linked.';
@@ -50,7 +58,7 @@
   await Promise.all([notes(),parts(),timeHistory()]);
   if(state.role==='owner'){
    by('customer-history-link').href='/profitability?customer='+encodeURIComponent(state.customer.id);by('back').href='/calls';by('back').textContent='← Calls';by('admin-links').hidden=false;by('admin-readiness').hidden=false;await readiness();
-   by('admin-pricing').hidden=false;by('tab-review').textContent='Review & bill';
+   by('admin-pricing').hidden=false;by('tab-review').textContent='Review & Bill';
    by('quote-call').href='/call-pricing?call='+encodeURIComponent(wo)+'&mode=estimate';
    by('invoice-call').href='/call-pricing?call='+encodeURIComponent(wo)+'&mode=actual';
   }
@@ -72,3 +80,4 @@
  by('confirm-parts').onclick=e=>act(e.target,async()=>{await api('/api/admin/calls/'+wo+'/parts-review','PUT',{expected_pricing_revision:state.readiness.pricing_revision});await readiness();msg('Parts review confirmed.');});
  setInterval(tick,1000);setInterval(()=>{if(state.role==='technician'&&!document.hidden)syncClock();},30000);window.addEventListener('online',()=>{if(state.role==='technician')syncClock();});window.addEventListener('offline',()=>{msg('Offline. Field changes and clock-out can be retained on this device. Synchronize before finishing the call.');});
 })();
+

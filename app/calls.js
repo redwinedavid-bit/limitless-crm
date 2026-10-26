@@ -48,3 +48,4 @@ el('quick-call').onsubmit=async e=>{e.preventDefault();if(saving)return;try{pend
 el('defaults-scope').onchange=()=>loadDefaults().catch(e=>el('defaults-state').textContent=e.message);
 el('defaults-form').onsubmit=async e=>{e.preventDefault();e.submitter.disabled=true;try{const data={expected_revision:defaultsRevision};for(const [key] of defaults)data[key]=el('default-'+key).value===''?null:el('default-'+key).value;const c=el('defaults-scope').value;const r=await api('/api/admin/pricing-defaults'+(c?'?customer_id='+encodeURIComponent(c):''),'PUT',data);defaultsRevision=r.revision;el('defaults-state').textContent='Saved. Defaults apply to new pricing; saved documents are unchanged.';}catch(err){el('defaults-state').textContent=err.message;}finally{e.submitter.disabled=false;}};
 })();
+

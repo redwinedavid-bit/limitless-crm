@@ -83,6 +83,13 @@ class PONew(BaseModel):
     description:str=''
     amount:Decimal=Field(gt=0)
     issue_date:Optional[date]=None
+class CallPONew(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    request_id:uuid.UUID
+    vendor:str=Field(min_length=1,max_length=250)
+    description:str=Field(min_length=1,max_length=5000)
+    amount:Decimal=Field(gt=0,max_digits=14,decimal_places=2)
+
 class ReceiptNew(BaseModel):
     reference:str=Field(min_length=2,max_length=100)
     amount:Decimal=Field(gt=0)
@@ -223,6 +230,27 @@ def attach_purchasing(app,ns):
             existing=db.get(m.PONumberCounter,prefix)
             prior=existing.last_number if existing else max((int(x[2:]) for x in db.scalars(select(m.PurchaseOrder.po_number).where(m.PurchaseOrder.po_number.like(prefix+'%'))) if re.fullmatch(re.escape(prefix)+r'\d+',x)),default=0)
             return {'po_prefix':prefix,'next_preview':f'{prefix}{prior+1:04d}','message':'Number is reserved on creation and may change if another session creates a PO first'}
+
+    @app.post('/api/calls/{wo_id}/purchase-orders',status_code=201)
+    def create_call_po(wo_id:str,data:CallPONew,user=Depends(require_buyer)):
+        fail_if_invalid_amount(data.amount)
+        if not data.vendor.strip() or not data.description.strip():raise HTTPException(422,'Enter a vendor and description')
+        with Session(m.engine) as db:
+            m.lock_time_user(db,user['id'])
+            w=m.permitted_wo(db,wo_id,user)
+            job=db.get(m.Job,w.job_id)
+            key=str(uuid.uuid5(uuid.NAMESPACE_URL,'lms-call-po:'+user['id']+':'+str(data.request_id)))
+            existing=db.get(m.PurchaseOrder,key)
+            description=data.description.strip()
+            if existing:
+                if (existing.job_id!=job.id or existing.vendor!=data.vendor.strip() or existing.description!=description or val(existing.amount)!=val(data.amount)):
+                    raise HTTPException(409,'This PO request was already used with different details. Review existing purchases before trying again.')
+                return serialize(db,existing)
+            number=generate_number(db,user['po_prefix'])
+            po=m.PurchaseOrder(id=key,po_number=number,job_id=job.id,vendor=data.vendor.strip(),description=description,
+                amount=val(data.amount),received_value=Decimal('0'),status='Issued',source='crm_v13',issue_date=date.today())
+            db.add(po);db.flush();m.log(db,'ISSUE','purchase_order',po.id,'buyer='+user['id']+'; job='+job.job_number+'; call='+wo_id)
+            result=serialize(db,po);db.commit();return result
 
     @app.post('/api/purchasing/pos',status_code=201)
     def create_po(data:PONew,user=Depends(require_buyer)):
@@ -366,3 +394,4 @@ def attach_purchasing(app,ns):
     def purchasing_page():return m.FileResponse(m.ROOT/'purchasing.html')
     @app.get('/purchasing.js')
     def purchasing_script():return m.FileResponse(m.ROOT/'purchasing.js',media_type='application/javascript')
+

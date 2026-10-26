@@ -88,3 +88,4 @@ def test_call_page_uses_versioned_script_and_revalidates_cache(setup_clock):
     ids = set(re.findall(r'\bid="([^"]+)"', page.text))
     referenced = set(re.findall(r"el\('([^']+)'\)", script.text))
     assert referenced <= ids, referenced - ids
+

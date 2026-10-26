@@ -1,11 +1,18 @@
 const el=id=>document.getElementById(id);
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-let rates=[];
+let rates=[];const reviewJob=new URLSearchParams(location.search).get('job'),reviewCall=new URLSearchParams(location.search).get('call');let reviewOrderIds=null;
 async function api(url,method='GET',body){const r=await fetch(url,{method,credentials:'same-origin',headers:{'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});const data=await r.json();if(!r.ok)throw Error(typeof data.detail==='string'?data.detail:'Check the entered values');return data;}
 function feedback(text,error=false){el('feedback').textContent=text;el('feedback').className=error?'error':'';}
 async function load(){
   try {
-    const [time,mileage,costRates,orders,invoices]=await Promise.all([api('/api/time/entries'),api('/api/time/mileage'),api('/api/labor-rates'),api('/api/work-orders'),api('/api/invoices')]);
+    let [time,mileage,costRates,orders,invoices]=await Promise.all([api('/api/time/entries'),api('/api/time/mileage'),api('/api/labor-rates'),api('/api/work-orders'),api('/api/invoices')]);
+    if(reviewJob||reviewCall){
+      orders=orders.filter(w=>(!reviewJob||w.job_number===reviewJob)&&(!reviewCall||w.id===reviewCall));
+      reviewOrderIds=new Set(orders.map(w=>w.id));time=time.filter(t=>reviewOrderIds.has(t.work_order_id));mileage=mileage.filter(t=>reviewOrderIds.has(t.work_order_id));
+      const jobs=new Set(orders.map(w=>w.job_number));invoices=invoices.filter(i=>jobs.has(i.job_number));
+      el('review-scope').textContent=orders.length?'Reviewing '+(reviewJob||orders[0].job_number)+' only.':'No matching calls for this job.';
+      const number=reviewJob||orders[0]?.job_number;if(number){el('back-job').hidden=false;el('back-job').href='/?page=jobs&job='+encodeURIComponent(number);}
+    }
     rates=costRates;
     await loadCorrections();
     el('invoice-call').innerHTML=orders.map(w=>`<option value="${esc(w.id)}">${esc(w.job_number)} · ${esc(w.summary)}</option>`).join('');
@@ -35,6 +42,7 @@ load();
 async function loadCorrections(){
  const me=await api('/api/auth/me');if(me.role!=='owner')return;
  el('corrections-section').hidden=false;const rows=await api('/api/time/corrections');
- el('corrections').innerHTML=rows.filter(r=>r.status==='Pending').map(r=>`<article><strong>${esc(r.technician)}</strong><p>${esc(r.reason)}</p><p>Requested: ${esc(new Date(r.started_at).toLocaleString())} → ${esc(new Date(r.ended_at).toLocaleString())}</p><p>Original: ${esc(r.original.started_at)} → ${esc(r.original.ended_at||'Running clock')}</p><label>Admin review note<input id="review-note-${esc(r.id)}" minlength="3" maxlength="2000"></label><button data-correction="${esc(r.id)}" data-decision="approve">Approve correction</button> <button data-correction="${esc(r.id)}" data-decision="reject">Reject</button></article>`).join('')||'<p>No pending time corrections.</p>';
+ el('corrections').innerHTML=rows.filter(r=>r.status==='Pending'&&(!reviewOrderIds||reviewOrderIds.has(r.work_order_id))).map(r=>`<article><strong>${esc(r.technician)}</strong><p>${esc(r.reason)}</p><p>Requested: ${esc(new Date(r.started_at).toLocaleString())} → ${esc(new Date(r.ended_at).toLocaleString())}</p><p>Original: ${esc(r.original.started_at)} → ${esc(r.original.ended_at||'Running clock')}</p><label>Admin review note<input id="review-note-${esc(r.id)}" minlength="3" maxlength="2000"></label><button data-correction="${esc(r.id)}" data-decision="approve">Approve correction</button> <button data-correction="${esc(r.id)}" data-decision="reject">Reject</button></article>`).join('')||'<p>No pending time corrections.</p>';
  el('corrections').querySelectorAll('[data-correction]').forEach(b=>b.onclick=()=>action(b,()=>{const note=el('review-note-'+b.dataset.correction).value;if(note.trim().length<3)throw Error('Enter an admin review note.');return api('/api/time/corrections/'+b.dataset.correction+'/review','POST',{decision:b.dataset.decision,note});}));
 }
+

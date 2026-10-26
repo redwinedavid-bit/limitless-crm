@@ -66,6 +66,7 @@ class QuickCallReceipt(m.Base):
     work_order_id:Mapped[str]=mapped_column(ForeignKey('work_orders.id',ondelete='RESTRICT'),nullable=False)
 
 class DefaultsIn(BaseModel):
+    overtime_sell_per_hour:Decimal|None=Field(default=None,ge=0,max_digits=12,decimal_places=2)
     labor_sell_per_hour:Decimal|None=Field(default=None,ge=0,max_digits=12,decimal_places=2)
     mileage_sell_per_mile:Decimal|None=Field(default=None,ge=0,max_digits=10,decimal_places=2)
     labor_cost_per_hour:Decimal|None=Field(default=None,ge=0,max_digits=12,decimal_places=2)
@@ -345,7 +346,7 @@ def attach_productivity(app):
             else:
                 numbers=[int(n[3:]) for n in db.scalars(select(m.Job.job_number)) if re.fullmatch(r'LMS\d+',n)]
                 number=max([int(counter.last_number),*numbers])+1;counter.last_number=str(number)
-                job=m.Job(job_number='LMS'+str(number),customer_id=customer.id,location_id=location_id,description=data.summary)
+                job=m.Job(job_number='LMS'+str(number).zfill(4),customer_id=customer.id,location_id=location_id,description=data.summary)
                 db.add(job);db.flush()
             w=m.WorkOrder(job_id=job.id,summary=data.summary.strip(),priority=data.priority)
             db.add(w);db.flush()

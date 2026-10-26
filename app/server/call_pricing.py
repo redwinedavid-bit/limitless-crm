@@ -76,6 +76,7 @@ class PricingPartIn(BaseModel):
         return self
 
 class PricingIn(BaseModel):
+    overtime_sell_per_hour:Decimal|None=Field(default=None,ge=0,max_digits=12,decimal_places=2)
     mode:Literal['estimate','actual']='estimate'
     parts:list[PricingPartIn]=Field(default_factory=list,max_length=100)
     labor_hours:Decimal=Field(default=Decimal('0'),ge=0,le=100000,decimal_places=3)
@@ -123,7 +124,7 @@ def call(db,wo_id,lock=False):
 def recorded_costs(db,wo_id):
     entries=list(db.scalars(select(m.FieldTimeEntry).where(m.FieldTimeEntry.work_order_id==wo_id).order_by(m.FieldTimeEntry.id)))
     mileage=list(db.scalars(select(m.CallMileage).where(m.CallMileage.work_order_id==wo_id).order_by(m.CallMileage.technician_id)))
-    blockers=[];hours=Decimal('0');labor=Decimal('0');miles=Decimal('0');vehicle=Decimal('0');evidence=[]
+    blockers=[];hours=Decimal('0');labor=Decimal('0');miles=Decimal('0');vehicle=Decimal('0');evidence=[];overtime=Decimal('0')
     if db.scalar(select(m.ActiveTimeClock.technician_id).where(m.ActiveTimeClock.work_order_id==wo_id)):
         blockers.append('A call clock is still running')
     if not entries:blockers.append('No completed call time has been recorded')
@@ -134,11 +135,12 @@ def recorded_costs(db,wo_id):
         hours+=entry.hours
         if not approval:blockers.append('Call time needs office approval')
         else:
-            labor+=approval.labor_cost;vehicle+=approval.mileage_cost
+            labor+=approval.labor_cost;vehicle+=approval.mileage_cost;overtime+=approval.overtime_hours
         # Legacy mileage remains a cost but cannot also be charged as new call mileage.
         miles+=entry.mileage
         evidence.append([entry.id,str(entry.hours),str(entry.mileage),approval.id if approval else None,
-                         str(approval.labor_cost) if approval else None,str(approval.mileage_cost) if approval else None])
+                         str(approval.labor_cost) if approval else None,str(approval.mileage_cost) if approval else None,
+                         str(approval.overtime_hours) if approval else None])
     for row in mileage:
         if row.end_odometer is None:blockers.append('Ending odometer is missing')
         if row.approved_cost is None:blockers.append('Call mileage needs office approval')
@@ -154,7 +156,7 @@ def recorded_costs(db,wo_id):
         from .operations_v110 import allocation_details
         evidence.append(['receipts',row.id,allocation_details(db,row.id)['evidence']])
     token=hashlib.sha256(dump(evidence).encode()).hexdigest()
-    return {'labor_hours':str(hours),'labor_cost':str(money(labor)),'miles':str(miles),
+    return {'labor_hours':str(hours),'overtime_hours':str(overtime),'labor_cost':str(money(labor)),'miles':str(miles),
             'mileage_cost':str(money(vehicle)),'odometer_recorded':bool(mileage),
             'blockers':list(dict.fromkeys(blockers)),'token':token}
 
@@ -216,7 +218,9 @@ def calculate(db,wo_id,data):
     policy=policy_for(db,job.customer_id)
     minimum_call=Decimal(policy['values']['minimum_call_price'])
     overhead=money(hours*Decimal(policy['values']['overhead_per_hour']))
-    add_line('Call labor (including travel time)',hours,data.labor_sell_per_hour)
+    overtime_hours=Decimal(recorded['overtime_hours']) if recorded and data.overtime_sell_per_hour is not None else Decimal('0')
+    add_line('Call labor (including travel time)',hours-overtime_hours,data.labor_sell_per_hour)
+    if overtime_hours:add_line('Overtime labor (including travel time)',overtime_hours,data.overtime_sell_per_hour)
     add_line('Call mileage',miles,data.mileage_sell_per_mile)
     if data.other_charge:add_line('Additional service materials / expenses',Decimal('1'),data.other_charge)
     if data.service_charge:add_line('Service call charge',Decimal('1'),data.service_charge)

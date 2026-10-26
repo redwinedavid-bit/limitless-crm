@@ -1507,3 +1507,6 @@ attach_overview(app)
 
 from .job_hub import attach_job_hub
 attach_job_hub(app)
+
+from .customer_import import attach_customer_import
+attach_customer_import(app)

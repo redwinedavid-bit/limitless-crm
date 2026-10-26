@@ -3,7 +3,7 @@
 const el=id=>document.getElementById(id),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let options,calls=[],requestId=crypto.randomUUID(),defaultsRevision=0,newCustomer=false,newSite=false,dirty=false,saving=false,pendingBody=null;
 const params=new URLSearchParams(location.search);
-const defaults=[['labor_sell_per_hour','Customer labor charge ($/hour)','0.01'],['mileage_sell_per_mile','Customer mileage charge ($/mile)','0.01'],['labor_cost_per_hour','Internal estimated labor cost ($/hour)','0.01'],['mileage_cost_per_mile','Internal vehicle cost ($/mile)','0.001'],['service_charge','Service call charge ($)','0.01'],['target_margin','Target margin (%)','1']];
+const defaults=[['overtime_sell_per_hour','Customer overtime charge ($/hour)','0.01'],['labor_sell_per_hour','Customer labor charge ($/hour)','0.01'],['mileage_sell_per_mile','Customer mileage charge ($/mile)','0.01'],['labor_cost_per_hour','Internal estimated labor cost ($/hour)','0.01'],['mileage_cost_per_mile','Internal vehicle cost ($/mile)','0.001'],['service_charge','Service call charge ($)','0.01'],['target_margin','Target margin (%)','1']];
 async function api(url,method='GET',body){const r=await fetch(url,{method,credentials:'same-origin',headers:{'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});const x=await r.json();if(!r.ok){const e=new Error(typeof x.detail==='string'?x.detail:Array.isArray(x.detail)?x.detail.map(d=>d.msg).join('; '):'Check the entered fields');e.status=r.status;throw e;}return x;}
 function message(text){el('message').textContent=text;if(text)el('message').focus();}
 function group(id,visible){el(id).hidden=!visible;el(id).disabled=!visible;}

@@ -1510,3 +1510,6 @@ attach_job_hub(app)
 
 from .customer_import import attach_customer_import
 attach_customer_import(app)
+
+from .site_cleanup import attach_site_cleanup
+attach_site_cleanup(app)

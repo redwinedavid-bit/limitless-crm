@@ -31,11 +31,12 @@
  async function notes(){const list=await api(base+'/notes');by('note-list').innerHTML=list.map(n=>`<div class="note"><span class="badge ${n.audience==='internal'?'internal':''}">${n.audience==='internal'?'Internal only':'Customer-facing'}</span> <strong>${esc(n.kind.replaceAll('_',' '))}</strong><br>${esc(n.text)}<br><small>${esc(n.author)} · ${esc(new Date(n.created_at).toLocaleString())}</small></div>`).join('')||'<p>No classified notes yet.</p>';}
  async function parts(){const list=await api(base+'/parts-used');by('used-list').innerHTML=list.map(p=>`<div class="usage">${p.active?'':'<span class="badge internal">Removed from usage</span> '}<strong>${esc(p.quantity)} ${esc(p.unit)} — ${esc(p.description)}</strong><br><small>${esc(p.author)}</small>${p.internal_note?`<p class="help">Internal: ${esc(p.internal_note)}</p>`:''}${p.active&&(state.role==='owner'||p.author_id===state.user_id)?`<button class="secondary" data-void="${esc(p.id)}">Correct / remove line</button>`:''}</div>`).join('')||'<p>No parts reported yet.</p>';
   by('used-list').querySelectorAll('[data-void]').forEach(button=>button.onclick=()=>act(button,async()=>{const p=list.find(p=>p.id===button.dataset.void);if(!confirm('Mark this line as removed? It will remain in the audit history.'))return;await api(base+'/parts-used/'+p.id,'PUT',{part_id:p.part_id,description:p.description,unit:p.unit,quantity:p.quantity,internal_note:p.internal_note,expected_revision:p.revision,active:false});await parts();msg('Line removed from active usage. Add a corrected line if needed.');await readiness();}));}
+ function teamLabel(t){return t.name+(team.filter(u=>u.name===t.name).length>1?' ('+t.username+')':'');}
  async function loadAssignments(){
   assignments=(await api('/api/dispatch')).filter(a=>a.work_order_id===wo&&a.status!=='Cancelled');
-  by('assignment-list').innerHTML=assignments.map(a=>`<p><strong>${esc(a.technician)}</strong><br>${esc(new Date(a.start).toLocaleString())} → ${esc(new Date(a.end).toLocaleString())}</p>`).join('')||'<p>No technician assigned yet.</p>';
+  by('assignment-list').innerHTML=assignments.map(a=>`<p><strong>${esc(team.find(t=>t.id===a.technician_id)?teamLabel(team.find(t=>t.id===a.technician_id)):a.technician)}</strong><br>${esc(new Date(a.start).toLocaleString())} → ${esc(new Date(a.end).toLocaleString())}</p>`).join('')||'<p>No technician assigned yet.</p>';
   const current=by('manual-person').value;
-  by('manual-person').innerHTML=team.filter(t=>assignments.some(a=>a.technician_id===t.id)).map(t=>`<option value="${esc(t.id)}">${esc(t.name)}</option>`).join('');
+  by('manual-person').innerHTML='<option value="">Choose an assigned team member</option>'+team.filter(t=>assignments.some(a=>a.technician_id===t.id)).map(t=>`<option value="${esc(t.id)}">${esc(teamLabel(t))}</option>`).join('');
   if([...by('manual-person').options].some(o=>o.value===current))by('manual-person').value=current;
  }
  async function timeHistory(){const rows=await api('/api/work-orders/'+wo+'/time');const total=rows.reduce((n,t)=>n+t.hours,0),approved=rows.filter(t=>t.approved).reduce((n,t)=>n+t.hours,0);by('time-total').textContent=rows.length+' entries · '+total.toFixed(2)+' total hours · '+approved.toFixed(2)+' approved · '+(total-approved).toFixed(2)+' awaiting approval';by('time-list').innerHTML=rows.map(t=>`<p><strong>${t.hours.toFixed(2)} hours</strong> · ${esc(t.technician)}<br>${esc(new Date(t.started_at).toLocaleString())} → ${esc(new Date(t.ended_at).toLocaleString())}<br>${t.note?esc(t.note)+'<br>':''}${t.approved?'Approved':'Awaiting approval'}${t.needs_review?' · Long entry: review required':''}</p>`).join('')||'No completed time yet.';
@@ -48,8 +49,8 @@
  try{
   state=await api(base+'/workspace');const me=await api('/api/auth/me');state.user_id=me.id;
   if(['owner','office'].includes(state.role)){
-   team=await api('/api/technicians');by('assignment-section').hidden=false;by('manual-person-label').hidden=false;
-   by('assign-person').innerHTML='<option value="">Choose team member</option>'+team.map(t=>`<option value="${esc(t.id)}">${esc(t.name)}</option>`).join('');
+   team=await api('/api/technicians');by('assignment-section').hidden=false;by('manual-person-label').hidden=false;by('manual-person').disabled=false;
+   by('assign-person').innerHTML='<option value="">Choose team member</option>'+team.map(t=>`<option value="${esc(t.id)}">${esc(teamLabel(t))}</option>`).join('');
    await loadAssignments();
    by('assignment-form').onsubmit=e=>{e.preventDefault();act(by('assign-save'),async()=>{await api('/api/work-orders/'+wo+'/assignments','POST',{technician_id:by('assign-person').value,scheduled_start:new Date(by('assign-start').value).toISOString(),scheduled_end:new Date(by('assign-end').value).toISOString()});await loadAssignments();msg('Technician assigned to this call.');});};
   }

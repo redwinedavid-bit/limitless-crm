@@ -311,7 +311,7 @@ def attach_productivity(app):
                     'customers':[{'id':c.id,'name':c.name,'billing_address':c.billing_address} for c in db.scalars(select(m.Customer).order_by(m.Customer.name))],
                     'locations':[{'id':l.id,'customer_id':l.customer_id,'name':l.name,'address':l.address} for l in db.scalars(select(m.Location))],
                     'jobs':[{'job_number':j.job_number,'customer_id':j.customer_id,'location_id':j.location_id,'description':j.description} for j in db.scalars(select(m.Job))],
-                    'technicians':[{'id':u.id,'name':u.display_name} for u in db.scalars(select(m.User).where(m.User.role.in_(('owner','office','technician')),m.User.active==True))]}
+                    'technicians':[{'id':u.id,'name':u.display_name,'username':u.username} for u in db.scalars(select(m.User).where(m.User.role.in_(('owner','office','technician')),m.User.active==True))]}
 
     @app.post('/api/calls/quick',status_code=201)
     def quick_call(data:QuickCallIn,user=Depends(m.require('manage_jobs'))):

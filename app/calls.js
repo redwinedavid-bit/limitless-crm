@@ -21,7 +21,7 @@ async function loadDefaults(){const customer=el('defaults-scope').value;const r=
 try{
  const me=await api('/api/auth/me');options=await api('/api/calls/options');calls=await api('/api/work-orders');
  drawCustomers();if(options.customers.some(c=>c.id===params.get('customer')))el('customer').value=params.get('customer');
- el('technician').innerHTML+=options.technicians.map(t=>`<option value="${esc(t.id)}">${esc(t.name)}</option>`).join('');
+ el('technician').innerHTML+=options.technicians.map(t=>`<option value="${esc(t.id)}">${esc(t.name+(options.technicians.filter(u=>u.name===t.name).length>1?' ('+t.username+')':''))}</option>`).join('');
  el('toggle-customer').hidden=!options.can_create_customer;el('toggle-site').hidden=!options.can_create_site;
  locations();showCalls();el('create-call').disabled=false;
  el('timezone-label').textContent='Times use your device timezone: '+Intl.DateTimeFormat().resolvedOptions().timeZone;

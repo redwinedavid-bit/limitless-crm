@@ -94,6 +94,56 @@ def test_mileage_replaces_total_and_costs_once(setup_clock):
     assert owner.get('/api/jobs/'+job+'/costs').json()['approved_field_cost']==12.5
     assert len(tech.get(path).json())==1
 
+
+def test_admin_and_technician_share_call_mileage(setup_clock):
+    clients,orders,now,tech_id,job=setup_clock
+    owner,tech=clients['owner'],clients['tech'];path='/api/work-orders/'+orders[0]+'/mileage'
+    start=owner.put(path,json={'start_odometer':1000,'expected_revision':0})
+    assert start.status_code==200,start.text
+    recorder=start.json()['technician_id']
+    assert tech.get(path).json()[0]['start_odometer']==1000
+    workspace=tech.get('/api/calls/'+orders[0]+'/workspace').json()
+    assert workspace['mileage'][0]['technician_id']==recorder
+    end=tech.put(path,json={'start_odometer':1000,'end_odometer':1020,'expected_revision':1})
+    assert end.status_code==200,end.text
+    assert end.json()['technician_id']==recorder and end.json()['miles']==20
+    assert owner.put(path,json={'start_odometer':1000,'end_odometer':1025,'expected_revision':1}).status_code==409
+    assert owner.put('/api/labor-rates',json={'technician_id':recorder,'hourly_cost':0,'mileage_rate':.5}).status_code==200
+    approve=path+'/'+recorder+'/approve'
+    assert owner.post(approve,json={'expected_revision':2}).json()['mileage_cost']==10
+    corrected=owner.put(path,json={'start_odometer':1000,'end_odometer':1025,'expected_revision':2})
+    assert corrected.status_code==200 and not corrected.json()['approved']
+    assert len(owner.get(path).json())==1
+    legacy={'started_at':(now[0]-timedelta(hours=2)).isoformat(),'ended_at':(now[0]-timedelta(hours=1)).isoformat(),'mileage':25}
+    assert tech.post('/api/work-orders/'+orders[0]+'/time',json=legacy).status_code==409
+    with Session(m.engine) as db:
+        logs=list(db.scalars(select(m.AuditEvent).where(m.AuditEvent.entity_id==orders[0],m.AuditEvent.event=='SAVE_CALL_MILEAGE')))
+        assert any('Edited by '+tech_id in log.detail for log in logs)
+
+
+@pytest.mark.parametrize('role',['office','dispatcher','estimator','bookkeeper'])
+def test_other_staff_can_enter_mileage_without_financial_permission_changes(setup_clock,role):
+    clients,orders,now,tech_id,job=setup_clock
+    other=clients['other'];uid=other.get('/api/auth/me').json()['id']
+    with Session(m.engine) as db:
+        db.get(m.User,uid).role=role;db.commit()
+    path='/api/work-orders/'+orders[0]+'/mileage'
+    result=other.put(path,json={'start_odometer':0,'end_odometer':10,'expected_revision':0})
+    assert result.status_code==200,result.text
+    assert result.json()['miles']==10
+    if role=='dispatcher':
+        assert other.get('/api/time/mileage').status_code==403
+
+
+def test_admin_mileage_on_unassigned_call_and_legacy_guard(setup_clock):
+    clients,orders,now,tech_id,job=setup_clock;owner=clients['owner']
+    call=owner.post('/api/work-orders',json={'job_number':job,'summary':'Unassigned mileage test'}).json()['id']
+    assert owner.put('/api/work-orders/'+call+'/mileage',json={'start_odometer':10,'end_odometer':12,'expected_revision':0}).status_code==200
+    assert clients['tech'].get('/api/work-orders/'+call+'/mileage').status_code==403
+    with Session(m.engine) as db:
+        db.add(m.FieldTimeEntry(work_order_id=orders[0],technician_id=tech_id,started_at=now[0]-timedelta(hours=2),ended_at=now[0]-timedelta(hours=1),hours=1,mileage=10));db.commit()
+    assert owner.put('/api/work-orders/'+orders[0]+'/mileage',json={'start_odometer':10,'end_odometer':20,'expected_revision':0}).status_code==409
+
 def test_legacy_mileage_and_future_overlap(setup_clock):
     clients,orders,now,tech_id,job=setup_clock;tech=clients['tech']
     with Session(m.engine) as db:
@@ -144,6 +194,7 @@ def test_start_reading_saved_before_finish_and_invoice_uses_calculated_miles(set
     assert tech.get(path).json()[0]['invoiced']
     assert owner.post(endpoint,json=charge).status_code==409
     assert tech.put(path,json={'start_odometer':120000,'end_odometer':120030,'expected_revision':2}).status_code==409
+    assert owner.put(path,json={'start_odometer':120000,'end_odometer':120030,'expected_revision':2}).status_code==409
     assert owner.put('/api/invoices/'+inv['id']+'/lines',json={'lines':[{'description':'Replacement','quantity':1,'unit_price':1}]}).status_code==409
     removed=owner.delete(endpoint+'/'+orders[0])
     assert removed.status_code==200 and removed.json()['amount']==100

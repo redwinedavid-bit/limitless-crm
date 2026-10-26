@@ -3,6 +3,17 @@
  const wo=decodeURIComponent(location.pathname.split('/').pop()),base='/api/calls/'+encodeURIComponent(wo);
  let state,clock,offset=0,mileRevision=0,noteDraft,partRequest=crypto.randomUUID(),noteRequest=crypto.randomUUID();
  const msg=t=>by('message').textContent=t;
+ const tabs=[...document.querySelectorAll('[data-panel]')];
+ function showPanel(key){
+  if(!tabs.some(t=>t.dataset.panel===key))key='details';
+  for(const tab of tabs){const active=tab.dataset.panel===key;tab.setAttribute('aria-selected',String(active));tab.tabIndex=active?0:-1;by('panel-'+tab.dataset.panel).hidden=!active;}
+ }
+ tabs.forEach((tab,index)=>{
+  tab.onclick=()=>{showPanel(tab.dataset.panel);history.replaceState(null,'','#'+tab.dataset.panel);};
+  tab.onkeydown=event=>{let next;if(event.key==='ArrowRight')next=(index+1)%tabs.length;else if(event.key==='ArrowLeft')next=(index+tabs.length-1)%tabs.length;else if(event.key==='Home')next=0;else if(event.key==='End')next=tabs.length-1;else return;event.preventDefault();tabs[next].focus();tabs[next].click();};
+ });
+ showPanel(location.hash.slice(1));
+ window.addEventListener('hashchange',()=>showPanel(location.hash.slice(1)));
  async function api(url,method='GET',body){const r=await fetch(url,{method,credentials:'same-origin',headers:{'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});const x=await r.json();if(!r.ok)throw Error(typeof x.detail==='string'?x.detail:'Check the entered fields');return x;}
  async function act(button,fn){button.disabled=true;try{await fn();}catch(e){msg(e.message);}finally{button.disabled=false;if(button.id==='clock-button')drawClock();}}
  function localInput(value){const d=new Date(value);return new Date(d-d.getTimezoneOffset()*60000).toISOString().slice(0,16);}
@@ -33,16 +44,15 @@
   const phone=(state.location?.phone||state.customer.phone).replace(/[^+\d]/g,'');by('contact-actions').innerHTML=(phone?`<a class="action" href="tel:${esc(phone)}">Call customer</a>`:'')+(state.location?.address?`<a class="action" href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(state.location.address)}" target="_blank" rel="noopener noreferrer">Directions</a>`:'');
   by('equipment').innerHTML=state.equipment.map(a=>`<p><strong>${esc(a.asset_tag)}</strong> · ${esc(a.manufacturer)} ${esc(a.model)}<br>Serial: ${esc(a.serial)}</p>`).join('')||'No equipment linked.';
   by('legacy-notes').innerHTML=state.notes.map(n=>`<div class="note"><small>Earlier service note · ${esc(n.author)}</small><br>${esc(n.note)}</div>`).join('');
-  const mile=state.mileage[0];mileRevision=mile?.revision||0;by('odo-start').value=mile?.start_odometer??'';by('odo-end').value=mile?.end_odometer??'';const readonly=state.role!=='technician'||!!mile?.invoiced;by('odo-start').disabled=readonly;by('odo-end').disabled=readonly;by('save-odometer').disabled=readonly;by('odo-state').textContent=mile?.invoiced?'Mileage is linked to an invoice.':state.role!=='technician'?'Odometer readings are entered by the assigned technician.':'Save the start now; add the finish when the call is done.';previewMiles();drawClock();
+  const mile=state.mileage[0];mileRevision=mile?.revision||0;by('odo-start').value=mile?.start_odometer??'';by('odo-end').value=mile?.end_odometer??'';const readonly=!!mile?.invoiced;by('odo-start').disabled=readonly;by('odo-end').disabled=readonly;by('save-odometer').disabled=readonly;by('odo-state').textContent=mile?.invoiced?'Mileage is linked to an invoice.':'Shared call mileage: any team member with access can save the start and finish.';previewMiles();drawClock();
   if(['owner','technician'].includes(state.role)){const catalog=await api('/api/field/parts-catalog');by('used-part').innerHTML='<option value="">Unlisted part</option>'+catalog.map(p=>`<option value="${esc(p.id)}">${esc(p.sku)} — ${esc(p.description)}</option>`).join('');}else{by('used-part-form').hidden=true;by('note-form').hidden=true;}
   noteDraft=new LMSDraft('/api/drafts/'+wo+'/field-note',()=>({text:by('note-text').value,kind:by('note-kind').value,audience:by('note-audience').value}),body=>{by('note-text').value=body.text||'';by('note-kind').value=body.kind||'service_description';by('note-audience').value=body.audience||'internal';},text=>by('note-draft-state').textContent=text);await noteDraft.init();
   await Promise.all([notes(),parts(),timeHistory()]);
   if(state.role==='owner'){
    by('customer-history-link').href='/profitability?customer='+encodeURIComponent(state.customer.id);by('back').href='/calls';by('back').textContent='← Calls';by('admin-links').hidden=false;by('admin-readiness').hidden=false;await readiness();
-   const html=await fetch('/call-pricing').then(r=>r.text());const doc=new DOMParser().parseFromString(html,'text/html');const panel=by('admin-pricing');panel.hidden=false;
-   const pricingStyles=doc.querySelector('style');if(pricingStyles){const style=document.createElement('style');style.textContent=pricingStyles.textContent;document.head.append(style);}
-   panel.innerHTML='<h2>Admin pricing, parts &amp; invoices</h2><p id="feedback" role="status"></p>'+[...doc.querySelectorAll('section.panel')].map(s=>s.outerHTML).join('');window.LMSCallContext=wo;const script=document.createElement('script');script.src='/call-pricing.js';document.body.append(script);
-   document.addEventListener('lms-pricing-saved',readiness);
+   by('admin-pricing').hidden=false;by('tab-review').textContent='Review & bill';
+   by('quote-call').href='/call-pricing?call='+encodeURIComponent(wo)+'&mode=estimate';
+   by('invoice-call').href='/call-pricing?call='+encodeURIComponent(wo)+'&mode=actual';
   }
  }catch(e){msg(e.message);return;}
  async function loadSystems(){const assets=await api(base+'/service-systems');by('service-system').innerHTML='<option value="">Choose a system</option>'+assets.filter(a=>!a.linked).map(a=>`<option value="${esc(a.id)}">${esc(a.location)} · ${esc(a.asset_tag)} · ${esc(a.model)}</option>`).join('');by('equipment').innerHTML=assets.filter(a=>a.linked).map(a=>`<p><strong>${esc(a.asset_tag)}</strong> · ${esc(a.manufacturer)} ${esc(a.model)}</p>`).join('')||'No equipment linked.';}

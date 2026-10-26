@@ -178,26 +178,25 @@ def attach_time_clock(app):
         with Session(m.engine) as db:
             m.permitted_wo(db, wo_id, user)
             query = select(m.CallMileage).where(m.CallMileage.work_order_id == wo_id)
-            if user['role'] == 'technician':
-                query = query.where(m.CallMileage.technician_id == user['id'])
             return [mileage_payload(db, row) for row in db.scalars(query)]
 
     @app.put('/api/work-orders/{wo_id}/mileage')
-    def save_mileage(wo_id: str, data: MileageIn, user=Depends(technician)):
+    def save_mileage(wo_id: str, data: MileageIn, user=Depends(m.current_user)):
         with Session(m.engine) as db:
             db.scalar(select(m.WorkOrder).where(m.WorkOrder.id==wo_id).with_for_update())
-            lock_time_user(db, user['id'])
             m.permitted_wo(db, wo_id, user)
             recorder = db.scalar(select(m.CallMileage).where(m.CallMileage.work_order_id==wo_id))
-            if recorder and recorder.technician_id!=user['id']:
-                raise HTTPException(409,'Odometer readings are already recorded for this call by another technician; ask that technician or the office to review')
+            # One shared trip per call. Preserve its cost-rate attribution when another
+            # authorized team member edits it, and record that editor in the audit log.
+            mileage_user_id = recorder.technician_id if recorder else user['id']
+            lock_time_user(db, mileage_user_id)
             # Avoid counting the same trip both on an old time entry and on the call.
             if db.scalar(select(m.FieldTimeEntry.id).where(m.FieldTimeEntry.work_order_id == wo_id,
-                    m.FieldTimeEntry.technician_id == user['id'], m.FieldTimeEntry.mileage > 0)):
+                    m.FieldTimeEntry.mileage > 0)):
                 raise HTTPException(409, 'Mileage is already recorded on legacy time entries for this call; ask the office to review before adding call mileage')
-            if db.get(m.MileageInvoiceLink,(wo_id,user['id'])):
+            if db.get(m.MileageInvoiceLink,(wo_id,mileage_user_id)):
                 raise HTTPException(409,'Mileage is linked to an invoice; the office must remove it from the draft before editing')
-            row = db.get(m.CallMileage, (wo_id, user['id']))
+            row = recorder
             if data.expected_revision != (row.revision if row else 0):
                 raise HTTPException(409, 'Mileage changed on another device; reload the call before saving')
             old = str(row.miles) if row else '0'
@@ -207,11 +206,11 @@ def attach_time_clock(app):
                 row.miles = miles; row.revision += 1; row.updated_at = clock_now()
                 row.approved_cost = None; row.approved_by = None; row.approved_at = None
             else:
-                row = m.CallMileage(work_order_id=wo_id, technician_id=user['id'], start_odometer=data.start_odometer, end_odometer=data.end_odometer, miles=miles,
+                row = m.CallMileage(work_order_id=wo_id, technician_id=mileage_user_id, start_odometer=data.start_odometer, end_odometer=data.end_odometer, miles=miles,
                                      revision=1, updated_at=clock_now())
                 db.add(row)
             db.flush()
-            m.log(db, 'SAVE_CALL_MILEAGE', 'work_order', wo_id, f'{old} -> {miles} miles; odometer {data.start_odometer} -> {data.end_odometer}; revision {row.revision}')
+            m.log(db, 'SAVE_CALL_MILEAGE', 'work_order', wo_id, f'Edited by {user["id"]}; rate member {mileage_user_id}; {old} -> {miles} miles; odometer {data.start_odometer} -> {data.end_odometer}; revision {row.revision}')
             result = mileage_payload(db, row); db.commit()
             return result
 
@@ -242,7 +241,7 @@ def attach_time_clock(app):
                 raise HTTPException(409, 'Mileage already approved')
             rate = db.scalar(select(m.LaborRate).where(m.LaborRate.technician_id == technician_id))
             if not rate:
-                raise HTTPException(422, 'Configure technician cost rate first')
+                raise HTTPException(422, 'Configure the recording team member\'s mileage cost rate first')
             row.approved_cost = (row.miles * rate.mileage_rate).quantize(Decimal('.01'), rounding=ROUND_HALF_UP)
             row.approved_by = user['id']; row.approved_at = clock_now()
             m.log(db, 'APPROVE_CALL_MILEAGE', 'work_order', wo_id, f'{technician_id}; revision {row.revision}')

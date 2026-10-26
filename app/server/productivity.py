@@ -213,9 +213,9 @@ def attach_productivity(app):
     @app.get('/calls/{wo_id}')
     def call_page(wo_id:str,user=Depends(m.current_user)):
         with Session(m.engine) as db:access(db,wo_id,user)
-        return FileResponse(m.ROOT/'call-workspace.html')
+        return FileResponse(m.ROOT/'call-workspace.html',headers={'Cache-Control':'private, no-cache'})
     @app.get('/call-workspace.js')
-    def workspace_script(user=Depends(m.current_user)):return FileResponse(m.ROOT/'call-workspace.js',media_type='application/javascript')
+    def workspace_script(user=Depends(m.current_user)):return FileResponse(m.ROOT/'call-workspace.js',media_type='application/javascript',headers={'Cache-Control':'private, no-cache'})
     @app.get('/drafts.js')
     def draft_script(user=Depends(m.current_user)):return FileResponse(m.ROOT/'drafts.js',media_type='application/javascript')
 
@@ -367,7 +367,6 @@ def attach_productivity(app):
             times=list(db.scalars(select(m.FieldTimeEntry).where(m.FieldTimeEntry.work_order_id==w.id).order_by(m.FieldTimeEntry.started_at)))
             if user['role']=='technician':times=[t for t in times if t.technician_id==user['id']]
             miles=list(db.scalars(select(m.CallMileage).where(m.CallMileage.work_order_id==w.id)))
-            if user['role']=='technician':miles=[r for r in miles if r.technician_id==user['id']]
             assets=db.scalars(select(m.Equipment).join(m.WorkOrderEquipment,m.Equipment.id==m.WorkOrderEquipment.equipment_id).where(m.WorkOrderEquipment.work_order_id==w.id))
             notes=db.scalars(select(m.ServiceNote).where(m.ServiceNote.work_order_id==w.id).order_by(m.ServiceNote.created_at.desc()))
             active=db.get(m.ActiveTimeClock,user['id']) if user['role']=='technician' else None

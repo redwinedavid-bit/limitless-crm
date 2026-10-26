@@ -719,7 +719,7 @@ def add_field_time(wo_id:str,data:TimeEntryIn,user=Depends(current_user)):
         else:raise HTTPException(403,'Time entries must be entered by assigned technician')
         lock_time_user(db,tech_id)
         ensure_no_time_overlap(db,tech_id,start,end)
-        if data.mileage>0 and db.get(CallMileage,(wo_id,tech_id)):
+        if data.mileage>0 and db.scalar(select(CallMileage).where(CallMileage.work_order_id==wo_id)):
             raise HTTPException(409,'Use the call mileage field; do not also record mileage on time entries')
         entry=FieldTimeEntry(work_order_id=w.id,technician_id=tech_id,started_at=start,ended_at=end,hours=Decimal(str(round(elapsed,2))),mileage=data.mileage,note=data.note)
         db.add(entry);db.flush()
@@ -769,7 +769,7 @@ class RateIn(BaseModel):
 def set_labor_rate(data:RateIn,user=Depends(require('view_financials'))):
     with Session(engine) as db:
         t=db.get(User,data.technician_id)
-        if not t or t.role!='technician':raise HTTPException(422,'Select a technician')
+        if not t or not t.active or t.role not in ROLE_SCOPES:raise HTTPException(422,'Select an active team member')
         rate=db.scalar(select(LaborRate).where(LaborRate.technician_id==t.id))
         if not rate:rate=LaborRate(technician_id=t.id);db.add(rate)
         rate.hourly_cost=data.hourly_cost;rate.overtime_multiplier=data.overtime_multiplier;rate.mileage_rate=data.mileage_rate

@@ -150,7 +150,7 @@ def test_historical_po_number_seeds_sequence_in_isolated_database():
 
 @pytest.mark.parametrize('prefix,first,second',[
     ('DR','DR0250','DR0251'),
-    ('AR','AR00350','AR00351'),
+    ('AR','AR0350','AR0351'),
     ('DB','DB0050','DB0051'),
 ])
 @pytest.mark.parametrize('existing_counter',[False,True])
@@ -190,9 +190,9 @@ def test_po_numbers_preserve_higher_counters_and_skip_imported_numeric_aliases()
                     amount=10,received_value=10,status='Historical',source='historical'))
             db.commit()
             assert next_po_number(db,'DR')=='DR0901'
-            assert next_po_number(db,'AR')=='AR00352'
+            assert next_po_number(db,'AR')=='AR0352'
             assert next_po_number(db,'DB')=='DB0071'
-            assert generate_number(db,'AR')=='AR00352'
+            assert generate_number(db,'AR')=='AR0352'
             assert generate_number(db,'DR')=='DR0901'
             assert generate_number(db,'DB')=='DB0071'
             db.commit()

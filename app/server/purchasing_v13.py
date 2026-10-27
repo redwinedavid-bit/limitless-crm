@@ -153,7 +153,7 @@ def require_bill_entry(user=Depends(m.current_user)):
 PO_PREFIXES=('DR','AR','DB')
 # First new PO numbers requested for the CRM; existing higher sequences never reset.
 PO_START_NUMBERS={'DR':250,'AR':350,'DB':50}
-PO_NUMBER_WIDTHS={'DR':4,'AR':5,'DB':4}
+PO_NUMBER_WIDTHS={'DR':4,'AR':4,'DB':4}
 MAX_ATTACHMENT=12*1024*1024
 ATTACHMENT_ROOT=Path(os.getenv('LMS_ATTACHMENT_DIR',str(m.ROOT/'private_uploads')))
 

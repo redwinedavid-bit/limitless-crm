@@ -1092,7 +1092,7 @@ def create_invoice(data:InvoiceInput,user=Depends(require('view_financials'))):
 @app.put('/api/invoices/{invoice_id}/lines')
 def replace_draft_invoice_lines(invoice_id:str,data:InvoiceLinesUpdate,user=Depends(require('view_financials'))):
     with Session(engine) as db:
-        inv=db.get(InvoiceRecord,invoice_id)
+        inv=db.scalar(select(InvoiceRecord).where(InvoiceRecord.id==invoice_id).with_for_update())
         if not inv:raise HTTPException(404,'Invoice missing')
         if inv.status!='Draft':raise HTTPException(409,'Issued invoice lines are immutable; use a credit memo')
         net,tax=put_invoice_lines(db,inv,data.lines)
@@ -1118,7 +1118,7 @@ def issue_invoice(invoice_id:str,user=Depends(require('view_financials'))):
 @app.post('/api/invoices/{invoice_id}/payments',status_code=201)
 def record_payment(invoice_id:str,data:PaymentInput,user=Depends(require('view_financials'))):
     with Session(engine) as db:
-        inv=db.get(InvoiceRecord,invoice_id)
+        inv=db.scalar(select(InvoiceRecord).where(InvoiceRecord.id==invoice_id).with_for_update())
         if not inv:raise HTTPException(404,'Invoice missing')
         if inv.status=='Draft':raise HTTPException(409,'Invoice must be issued')
         if db.scalar(select(InvoicePayment.id).where(InvoicePayment.reference==data.reference)):raise HTTPException(409,'Payment reference already recorded')
@@ -1132,7 +1132,7 @@ def record_payment(invoice_id:str,data:PaymentInput,user=Depends(require('view_f
 @app.post('/api/invoices/{invoice_id}/credits',status_code=201)
 def create_invoice_credit(invoice_id:str,data:CreditInput,user=Depends(require('view_financials'))):
     with Session(engine) as db:
-        inv=db.get(InvoiceRecord,invoice_id)
+        inv=db.scalar(select(InvoiceRecord).where(InvoiceRecord.id==invoice_id).with_for_update())
         if not inv:raise HTTPException(404,'Invoice missing')
         if inv.status=='Draft':raise HTTPException(409,'Cannot credit draft invoice')
         if db.scalar(select(InvoiceCredit.id).where(InvoiceCredit.number==data.number)):raise HTTPException(409,'Credit memo number already exists')

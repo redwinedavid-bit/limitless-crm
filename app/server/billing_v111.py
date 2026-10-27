@@ -35,6 +35,16 @@ class InvoiceSnapshot(m.Base):
  invoice_id:Mapped[str]=mapped_column(ForeignKey('crm_invoices.id',ondelete='RESTRICT'),primary_key=True)
  json:Mapped[str]=mapped_column(Text,nullable=False)
 
+class InvoiceReopening(m.Base):
+ __tablename__='invoice_reopenings'
+ id:Mapped[str]=mapped_column(String(36),primary_key=True,default=lambda:str(uuid.uuid4()))
+ invoice_id:Mapped[str]=mapped_column(ForeignKey('crm_invoices.id',ondelete='RESTRICT'),index=True,nullable=False)
+ original_json:Mapped[str]=mapped_column(Text,nullable=False)
+ original_pdf:Mapped[bytes]=mapped_column(LargeBinary,nullable=False)
+ reason:Mapped[str]=mapped_column(Text,nullable=False)
+ reopened_by:Mapped[str]=mapped_column(ForeignKey('users.id',ondelete='RESTRICT'),nullable=False)
+ reopened_at:Mapped[datetime]=mapped_column(DateTime(timezone=True),default=now,nullable=False)
+
 class CustomerContact(m.Base):
  __tablename__='customer_contacts_v111'
  id:Mapped[str]=mapped_column(String(36),primary_key=True,default=lambda:str(uuid.uuid4()))
@@ -136,6 +146,10 @@ class InvoiceMetaIn(BaseModel):
   if self.service_from and self.service_to and self.service_to<self.service_from:raise ValueError('Service dates must be ordered')
   return self
 
+class ReopenInvoiceIn(BaseModel):
+ expected_revision:int=Field(ge=0)
+ reason:str=Field(min_length=10,max_length=2000)
+
 class ContactIn(BaseModel):
  customer_id:str
  location_id:str|None=None
@@ -188,6 +202,28 @@ def settings(db):
  return {'revision':row.revision if row else 0,'values':v,'invoice_sender':SENDER}
 
 
+def reopen_blockers(db,inv):
+ reasons=[]
+ if inv.status!='Issued':reasons.append('Only issued, unpaid invoices can be reopened.')
+ if db.get(WaveOpening,inv.id):reasons.append('Imported opening balances must be corrected with a credit memo.')
+ for model,label in [(m.InvoicePayment,'payments'),(m.InvoiceCredit,'credits'),(m.InvoiceRefund,'refunds')]:
+  if db.scalar(select(model.id).where(model.invoice_id==inv.id)):
+   reasons.append('This invoice has '+label+'; use the billing adjustment workflow.')
+ if db.scalar(select(m.InvoiceEmailEvent.id).where(m.InvoiceEmailEvent.invoice_id==inv.id)):
+  reasons.append('This invoice has been emailed; use a credit and replacement invoice.')
+ mail=list(db.scalars(select(MailOutbox).where(MailOutbox.invoice_id==inv.id)))
+ if any(row.status not in ('Preview','Failed','Cancelled','Superseded') or row.provider_id for row in mail):
+  reasons.append('Email is queued, sent, or awaiting confirmation; resolve delivery before correcting this invoice.')
+ return reasons
+
+
+def reopening_history(db,inv):
+ return [{'id':r.id,'reason':r.reason,'reopened_at':utc(r.reopened_at).isoformat(),
+          'original_amount':json.loads(r.original_json)['invoice']['amount'],
+          'pdf_url':'/api/admin/invoices/'+inv.id+'/reopenings/'+r.id+'/pdf'}
+         for r in db.scalars(select(InvoiceReopening).where(InvoiceReopening.invoice_id==inv.id).order_by(InvoiceReopening.reopened_at.desc()))]
+
+
 def metadata(db,inv):
  row=db.get(CommercialInvoice,inv.id);v=json.loads(row.json) if row else {}
  link=db.scalar(select(p.CallPricingExport).where(p.CallPricingExport.kind=='invoice',p.CallPricingExport.record_id==inv.id))
@@ -195,7 +231,8 @@ def metadata(db,inv):
  lines=m.invoice_lines(db,inv)
  v.setdefault('taxable',any(line.tax_amount>0 for line in lines))
  v.setdefault('tax_rate',str(next((line.tax_rate for line in lines if line.tax_rate>0),Decimal('0'))))
- return {'revision':row.revision if row else 0,'values':v}
+ return {'revision':row.revision if row else 0,'values':v,'reopen_blockers':reopen_blockers(db,inv),
+         'reopenings':reopening_history(db,inv),'call_pricing_url':'/call-pricing?call='+link.work_order_id+'&mode=actual' if link else None}
 
 
 def freeze_invoice(db,inv):
@@ -221,6 +258,7 @@ def mail_payload(row):
 
 
 def enqueue(db,inv,user,request_id,recipient,subject,message,confirm_resend=False,purpose='Invoice'):
+ db.refresh(inv,with_for_update=True)
  recipient=email(recipient);request_id=str(request_id)
  if inv.status=='Draft':raise HTTPException(409,'Issue the invoice before preparing its email')
  prior=db.scalar(select(MailOutbox).where(MailOutbox.request_id==request_id))
@@ -324,6 +362,40 @@ def attach_billing(app):
    inv=db.get(m.InvoiceRecord,invoice_id)
    if not inv:raise HTTPException(404,'Invoice not found')
    return metadata(db,inv)
+ @app.post('/api/admin/invoices/{invoice_id}/reopen')
+ def reopen_invoice(invoice_id:str,data:ReopenInvoiceIn,user=Depends(p.owner)):
+  reason=data.reason.strip()
+  if len(reason)<10:raise HTTPException(422,'Enter at least 10 characters explaining the correction')
+  with Session(m.engine) as db:
+   inv=db.scalar(select(m.InvoiceRecord).where(m.InvoiceRecord.id==invoice_id).with_for_update())
+   if not inv:raise HTTPException(404,'Invoice not found')
+   commercial=db.get(CommercialInvoice,inv.id)
+   if data.expected_revision!=(commercial.revision if commercial else 0):raise HTTPException(409,'Invoice changed; reload before reopening')
+   blockers=reopen_blockers(db,inv)
+   if blockers:raise HTTPException(409,' '.join(blockers))
+   frozen=freeze_invoice(db,inv)
+   link=db.scalar(select(p.CallPricingExport).where(p.CallPricingExport.kind=='invoice',p.CallPricingExport.record_id==inv.id))
+   archive=InvoiceReopening(invoice_id=inv.id,reason=reason,reopened_by=user['id'],
+       original_json=p.dump({'invoice':m.invoice_data(inv,db),'snapshot':frozen,
+                             'pricing_snapshot':json.loads(link.snapshot_json) if link else None}),
+       original_pdf=m._invoice_pdf(db,inv))
+   db.add(archive);db.flush()
+   snapshot=db.get(InvoiceSnapshot,inv.id)
+   if snapshot:db.delete(snapshot)
+   for mail in db.scalars(select(MailOutbox).where(MailOutbox.invoice_id==inv.id,MailOutbox.status.in_(['Preview','Failed','Cancelled']))):
+    mail.status='Superseded';mail.error='Preserved original attachment; invoice reopened as draft.'
+   if commercial:commercial.revision+=1
+   else:db.add(CommercialInvoice(invoice_id=inv.id,json=p.dump(frozen['commercial'])))
+   inv.status='Draft';inv.issued_on=None
+   m.log(db,'REOPEN_INVOICE','invoice',inv.id,p.dump({'reason':reason,'archive_id':archive.id,'number':inv.number}))
+   db.commit()
+   return {'id':inv.id,'number':inv.number,'status':inv.status,'archive_id':archive.id}
+ @app.get('/api/admin/invoices/{invoice_id}/reopenings/{archive_id}/pdf')
+ def original_invoice_pdf(invoice_id:str,archive_id:str,user=Depends(p.owner)):
+  with Session(m.engine) as db:
+   row=db.get(InvoiceReopening,archive_id)
+   if not row or row.invoice_id!=invoice_id:raise HTTPException(404,'Original invoice not found')
+   return StreamingResponse(io.BytesIO(row.original_pdf),media_type='application/pdf',headers={'Cache-Control':'private, no-store'})
  @app.put('/api/admin/invoices/{invoice_id}/details')
  def save_meta(invoice_id:str,data:InvoiceMetaIn,user=Depends(p.owner)):
   with Session(m.engine) as db:

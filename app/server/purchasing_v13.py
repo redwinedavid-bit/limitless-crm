@@ -151,6 +151,9 @@ def require_bill_entry(user=Depends(m.current_user)):
     return user
 
 PO_PREFIXES=('DR','AR','DB')
+# First new PO numbers requested for the CRM; existing higher sequences never reset.
+PO_START_NUMBERS={'DR':250,'AR':350,'DB':50}
+PO_NUMBER_WIDTHS={'DR':4,'AR':5,'DB':4}
 MAX_ATTACHMENT=12*1024*1024
 ATTACHMENT_ROOT=Path(os.getenv('LMS_ATTACHMENT_DIR',str(m.ROOT/'private_uploads')))
 
@@ -171,18 +174,31 @@ def editable_po(db,number,user):
         raise HTTPException(403,'You may only edit purchase orders using your own designator')
     return p
 
-def generate_number(db,prefix):
+def po_number_floor(db,prefix):
     if prefix not in PO_PREFIXES:raise HTTPException(403,'No assigned PO designator')
-    # Seed from the largest real (not preformatted empty row) historical code.
-    if not db.get(m.PONumberCounter,prefix):
-        historical=db.scalars(select(m.PurchaseOrder.po_number).where(m.PurchaseOrder.po_number.like(prefix+'%'))).all()
-        maximum=max((int(x[2:]) for x in historical if re.fullmatch(re.escape(prefix)+r'\d+',x)),default=0)
-        if db.bind.dialect.name=='sqlite':
-            db.execute(text('INSERT OR IGNORE INTO po_number_counters(prefix,last_number) VALUES (:p,:n)'),{'p':prefix,'n':maximum})
-        else:
-            db.execute(text('INSERT INTO po_number_counters(prefix,last_number) VALUES (:p,:n) ON CONFLICT (prefix) DO NOTHING'),{'p':prefix,'n':maximum})
-    sequence=db.scalar(text('UPDATE po_number_counters SET last_number=last_number+1 WHERE prefix=:p RETURNING last_number'),{'p':prefix})
-    return f'{prefix}{int(sequence):04d}'
+    numbers=db.scalars(select(m.PurchaseOrder.po_number).where(m.PurchaseOrder.po_number.like(prefix+'%')))
+    used=max((int(number[2:]) for number in numbers if re.fullmatch(re.escape(prefix)+r'\d+',number)),default=0)
+    return max(PO_START_NUMBERS[prefix]-1,used)
+
+
+def format_po_number(prefix,sequence):
+    return f'{prefix}{int(sequence):0{PO_NUMBER_WIDTHS[prefix]}d}'
+
+
+def next_po_number(db,prefix):
+    floor=po_number_floor(db,prefix)
+    counter=db.get(m.PONumberCounter,prefix)
+    return format_po_number(prefix,max(floor,counter.last_number if counter else 0)+1)
+
+
+def generate_number(db,prefix):
+    floor=po_number_floor(db,prefix)
+    # Insert a missing counter, then reserve atomically. CASE also advances old
+    # counters to the requested start or past imported POs, without moving backward.
+    db.execute(text('INSERT INTO po_number_counters(prefix,last_number) VALUES (:p,:n) ON CONFLICT (prefix) DO NOTHING'),{'p':prefix,'n':floor})
+    sequence=db.scalar(text('UPDATE po_number_counters SET last_number=CASE WHEN last_number<:n THEN :n+1 ELSE last_number+1 END WHERE prefix=:p RETURNING last_number'),{'p':prefix,'n':floor})
+    return format_po_number(prefix,sequence)
+
 
 def sniff_mime(data):
     if data.startswith(b'\xff\xd8\xff'):return 'image/jpeg'
@@ -250,9 +266,7 @@ def attach_purchasing(app,ns):
         if prefix not in PO_PREFIXES:
             return {'po_prefix':None,'next_preview':None,'message':'Owner must assign this user a DR, AR or DB designator'}
         with Session(m.engine) as db:
-            existing=db.get(m.PONumberCounter,prefix)
-            prior=existing.last_number if existing else max((int(x[2:]) for x in db.scalars(select(m.PurchaseOrder.po_number).where(m.PurchaseOrder.po_number.like(prefix+'%'))) if re.fullmatch(re.escape(prefix)+r'\d+',x)),default=0)
-            return {'po_prefix':prefix,'next_preview':f'{prefix}{prior+1:04d}','message':'Number is reserved on creation and may change if another session creates a PO first'}
+            return {'po_prefix':prefix,'next_preview':next_po_number(db,prefix),'message':'Number is reserved on creation and may change if another session creates a PO first'}
 
     @app.post('/api/calls/{wo_id}/purchase-orders',status_code=201)
     def create_call_po(wo_id:str,data:CallPONew,user=Depends(require_buyer)):

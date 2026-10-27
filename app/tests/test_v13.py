@@ -1,11 +1,12 @@
 """Job-specific auto-numbered POs, receipts, security, and job-cost lifecycle."""
 import base64
+import pytest
 import uuid
 from decimal import Decimal
 from fastapi.testclient import TestClient
 from sqlalchemy import select, create_engine
 from sqlalchemy.orm import Session
-from server.main import app,engine,Base,Customer,Job,PurchaseOrder
+from server.main import app,engine,Base,Customer,Job,PurchaseOrder,PONumberCounter
 from server.security import User,password_hash
 
 
@@ -50,7 +51,7 @@ def test_dr_auto_number_no_approval_costs_receiving_credits():
         db.commit()
     # Other integration tests share this database and may already have issued DR POs.
     expected=c.get('/api/purchasing/my-number').json()['next_preview']
-    assert expected.startswith('DR') and int(expected[2:])>=211
+    assert expected.startswith('DR') and int(expected[2:])>=250
     assert create(c,'LMS999999999').status_code==422
     assert create(c,j,'5.125').status_code==422
     assert create(c,j,number='AR9999').status_code==422
@@ -136,12 +137,64 @@ def test_historical_po_number_seeds_sequence_in_isolated_database():
         with Session(isolated) as db:
             customer=Customer(name='Isolated numbering test');db.add(customer);db.flush()
             job=Job(job_number='LMS-NUMBERING',customer_id=customer.id);db.add(job);db.flush()
-            db.add(PurchaseOrder(po_number='DR0210',job_id=job.id,vendor='Legacy supplier',
+            db.add(PurchaseOrder(po_number='DR0300',job_id=job.id,vendor='Legacy supplier',
                 amount=Decimal('10'),received_value=Decimal('10'),status='Historical',source='historical'))
             db.commit()
-            assert generate_number(db,'DR')=='DR0211'
+            assert generate_number(db,'DR')=='DR0301'
             db.commit()
         with Session(isolated) as db:
-            assert generate_number(db,'DR')=='DR0212'
+            assert generate_number(db,'DR')=='DR0302'
+    finally:
+        isolated.dispose()
+
+
+@pytest.mark.parametrize('prefix,first,second',[
+    ('DR','DR0250','DR0251'),
+    ('AR','AR00350','AR00351'),
+    ('DB','DB0050','DB0051'),
+])
+@pytest.mark.parametrize('existing_counter',[False,True])
+def test_po_requested_starts_preview_and_reservation(prefix,first,second,existing_counter):
+    from server.purchasing_v13 import generate_number,next_po_number
+    isolated=create_engine('sqlite://')
+    try:
+        Base.metadata.create_all(isolated)
+        with Session(isolated) as db:
+            if existing_counter:
+                db.add(PONumberCounter(prefix=prefix,last_number=7));db.commit()
+            assert next_po_number(db,prefix)==first
+            assert next_po_number(db,prefix)==first  # Preview must not reserve a number.
+            assert generate_number(db,prefix)==first
+            db.commit()
+        with Session(isolated) as db:
+            assert next_po_number(db,prefix)==second
+            assert generate_number(db,prefix)==second
+            db.commit()
+    finally:
+        isolated.dispose()
+
+
+def test_po_numbers_preserve_higher_counters_and_skip_imported_numeric_aliases():
+    from server.purchasing_v13 import generate_number,next_po_number
+    isolated=create_engine('sqlite://')
+    try:
+        Base.metadata.create_all(isolated)
+        with Session(isolated) as db:
+            customer=Customer(name='Numbering safety');db.add(customer);db.flush()
+            job=Job(job_number='LMS-NUMBERING-SAFETY',customer_id=customer.id);db.add(job);db.flush()
+            db.add_all([PONumberCounter(prefix='DR',last_number=900),
+                        PONumberCounter(prefix='AR',last_number=12),
+                        PONumberCounter(prefix='DB',last_number=70)])
+            for number in ['AR0350','AR00351','ARHIST99999','AR99999-VOID']:
+                db.add(PurchaseOrder(po_number=number,job_id=job.id,vendor='Imported',
+                    amount=10,received_value=10,status='Historical',source='historical'))
+            db.commit()
+            assert next_po_number(db,'DR')=='DR0901'
+            assert next_po_number(db,'AR')=='AR00352'
+            assert next_po_number(db,'DB')=='DB0071'
+            assert generate_number(db,'AR')=='AR00352'
+            assert generate_number(db,'DR')=='DR0901'
+            assert generate_number(db,'DB')=='DB0071'
+            db.commit()
     finally:
         isolated.dispose()

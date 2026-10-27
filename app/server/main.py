@@ -1297,7 +1297,9 @@ def invoice_document(invoice_id:str,user=Depends(require('view_financials'))):
         else:
             rows='<tr><td>'+e(j.description or 'HVAC services')+'</td><td class="right">1</td><td class="right">'+fmt(inv.amount)+'</td><td class="right">0%</td><td class="right">$0.00</td><td class="right">'+fmt(inv.amount)+'</td></tr>'
             subtotal=inv.amount;tax=Decimal('0')
-        commercial_html='<p>Customer PO: '+e(commercial.get('customer_po',''))+'<br>Service dates: '+e(commercial.get('service_from',''))+' — '+e(commercial.get('service_to',''))+'</p><p>'+e(commercial.get('note',''))+'</p>'
+        if commercial.get('separate_material_labor') is False and lines:
+            rows='<tr><td>Services &amp; Materials</td><td class="right">1</td><td class="right">'+fmt(subtotal)+'</td><td></td><td class="right">'+fmt(tax)+'</td><td class="right">'+fmt(subtotal+tax)+'</td></tr>'
+        commercial_html=('<h2>Job Summary</h2><p>'+e(commercial.get('job_summary',''))+'</p>')+'<p>Customer PO: '+e(commercial.get('customer_po',''))+'<br>Service dates: '+e(commercial.get('service_from',''))+' — '+e(commercial.get('service_to',''))+'</p><p>'+e(commercial.get('note',''))+'</p>'
         remit_html='<p>Make checks payable to '+e(commercial.get('remit_to',''))+'<br>'+e(commercial.get('remit_address',''))+'<br>'+e(commercial.get('payment_terms',''))+'<br>'+e(commercial.get('reply_to',''))+'</p>'
         totals=''.join('<div><span>'+e(label)+'</span><strong>'+fmt(value)+'</strong></div>' for label,value in [
           ('Subtotal',subtotal),('Tax',tax),('Invoice total',inv.amount),('Credits applied',-ledger['credits']),

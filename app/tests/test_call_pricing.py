@@ -81,8 +81,7 @@ def test_actual_costs_invoice_and_duplicate_mileage_protection(setup_clock):
     owner.post('/api/time/'+time['id']+'/approve',json={})
     path='/api/work-orders/'+orders[0]+'/mileage'
     tech.put(path,json={'start_odometer':10000,'end_odometer':10010,'expected_revision':0})
-    assert not owner.post(base+'/preview',json=data).json()['ready_to_export']
-    owner.post(path+'/'+tech_id+'/approve',json={'expected_revision':1})
+    assert owner.post(base+'/preview',json=data).json()['ready_to_export']  # mileage applies without approval
     saved=owner.put(base+'/actual',json=data)
     assert saved.status_code==200,saved.text
     pricing=saved.json()['pricing']
@@ -95,7 +94,8 @@ def test_actual_costs_invoice_and_duplicate_mileage_protection(setup_clock):
     assert owner.post(base+'/invoice/export',json=export).json()['id']==invoice_id
     invoices=owner.get('/api/invoices').json();inv=next(i for i in invoices if i['id']==invoice_id)
     assert inv['amount']==341
-    assert [x['quantity'] for x in inv['lines'] if x['description']=='Call mileage']==[10]
+    assert [x['subtotal'] for x in inv['lines'] if x['description']=='Materials']==[110]
+    assert not any('mileage' in x['description'].lower() for x in inv['lines'])
     assert tech.get(path).json()[0]['invoiced']
     assert owner.post('/api/invoices/'+invoice_id+'/call-mileage',json={'work_order_id':orders[0],'unit_price':1}).status_code==409
     assert owner.post('/api/invoices/'+invoice_id+'/issue').status_code==200
@@ -129,3 +129,4 @@ def test_discount_bypass_and_cost_change_require_review(setup_clock):
     assert owner.put(base+'/actual',json={**data,'expected_revision':2,'labor_sell_per_hour':110}).status_code==200
     assert owner.post(base+'/invoice/export',json={'number':number,'expected_revision':3}).status_code==200
     assert owner.post('/api/invoices/'+inv_id+'/issue').status_code==200
+

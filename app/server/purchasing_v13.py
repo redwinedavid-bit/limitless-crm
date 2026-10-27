@@ -38,6 +38,9 @@ def details(db,p):
     actual=val(invoiced-credits+open_received)
     # Each newly created PO is immediately issued and committed; no manager approval is required.
     committed=max(Decimal('0.00'),val(p.amount)-gross_received) if p.status in ('Issued','Partially Received','Received') else Decimal('0.00')
+    # Job cost is posted on issue. Receiving/bills replace that baseline; never add it twice.
+    actual=val(actual+committed)
+    committed=Decimal('0.00')
     return {'actual':actual,'committed':committed,'received':gross_received,'returns':returned,
             'invoiced':invoiced,'credits':credits,'matched':matched,'unbilled_received':open_received}
 
@@ -64,7 +67,7 @@ def serialize(db,p,with_events=False):
             'vendor_invoiced':float(d['invoiced']),'vendor_credits':float(d['credits']),
             'matched_receipt_value':float(d['matched']), 'unbilled_received':float(d['unbilled_received']),
             'actual_cost':float(d['actual']),'open_commitment':float(d['committed']),
-            'historical_cost_already_in_job_totals':p.source=='historical'}
+            'historical_cost_already_in_job_totals':p.source=='historical','cost_applied_to_job':p.source!='historical' and p.status!='Cancelled'}
     if with_events:
         result['attachments']=[attachment_info(a) for a in db.scalars(select(m.POAttachment).where(m.POAttachment.po_id==p.id).order_by(m.POAttachment.uploaded_at))]
         specs=[('receipts',m.POReceipt,'received_on'),('vendor_invoices',m.POVendorInvoice,'invoice_date'),
@@ -394,4 +397,5 @@ def attach_purchasing(app,ns):
     def purchasing_page():return m.FileResponse(m.ROOT/'purchasing.html')
     @app.get('/purchasing.js')
     def purchasing_script():return m.FileResponse(m.ROOT/'purchasing.js',media_type='application/javascript')
+
 

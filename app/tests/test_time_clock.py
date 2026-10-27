@@ -73,22 +73,22 @@ def test_mileage_replaces_total_and_costs_once(setup_clock):
     clients,orders,now,tech_id,job=setup_clock;tech=clients['tech'];owner=clients['owner'];other=clients['other'];path='/api/work-orders/'+orders[0]+'/mileage'
     assert other.put(path,json={'start_odometer':100,'end_odometer':120,'expected_revision':0}).status_code==403
     assert tech.put(path,json={'start_odometer':100,'end_odometer':99,'expected_revision':0}).status_code==422
+    assert owner.put('/api/labor-rates',json={'technician_id':tech_id,'hourly_cost':20,'mileage_rate':.5}).status_code==200
     saved=tech.put(path,json={'start_odometer':100,'end_odometer':120,'expected_revision':0})
     assert saved.status_code==200,saved.text
     assert saved.json()['miles']==20 and saved.json()['revision']==1
     assert tech.put(path,json={'start_odometer':100,'end_odometer':130,'expected_revision':0}).status_code==409
     assert tech.get('/api/time/mileage').status_code==403
-    assert owner.put('/api/labor-rates',json={'technician_id':tech_id,'hourly_cost':20,'mileage_rate':.5}).status_code==200
     approve=path+'/'+tech_id+'/approve'
     assert other.post(approve,json={'expected_revision':1}).status_code==403
     assert owner.post(approve,json={'expected_revision':1}).json()['mileage_cost']==10
-    assert owner.post(approve,json={'expected_revision':1}).status_code==409
+    assert owner.post(approve,json={'expected_revision':1}).status_code==200
     assert owner.get('/api/jobs/'+job+'/field-costs').json()['approved_field_labor_and_mileage']==10
     assert owner.get('/api/jobs/'+job+'/costs').json()['approved_field_cost']==10
     assert owner.get('/api/jobs/'+job+'/financial-overview').json()['historical_and_approved_actual_cost']==10
     replaced=tech.put(path,json={'start_odometer':100,'end_odometer':125,'expected_revision':1})
-    assert replaced.json()['miles']==25 and not replaced.json()['approved']
-    assert owner.get('/api/jobs/'+job+'/costs').json()['approved_field_cost']==0
+    assert replaced.json()['miles']==25 and replaced.json()['applied']
+    assert owner.get('/api/jobs/'+job+'/costs').json()['approved_field_cost']==12.5
     assert owner.post(approve,json={'expected_revision':1}).status_code==409
     assert owner.post(approve,json={'expected_revision':2}).json()['mileage_cost']==12.5
     assert owner.get('/api/jobs/'+job+'/costs').json()['approved_field_cost']==12.5
@@ -104,15 +104,15 @@ def test_admin_and_technician_share_call_mileage(setup_clock):
     assert tech.get(path).json()[0]['start_odometer']==1000
     workspace=tech.get('/api/calls/'+orders[0]+'/workspace').json()
     assert workspace['mileage'][0]['technician_id']==recorder
+    assert owner.put('/api/labor-rates',json={'technician_id':recorder,'hourly_cost':0,'mileage_rate':.5}).status_code==200
     end=tech.put(path,json={'start_odometer':1000,'end_odometer':1020,'expected_revision':1})
     assert end.status_code==200,end.text
     assert end.json()['technician_id']==recorder and end.json()['miles']==20
     assert owner.put(path,json={'start_odometer':1000,'end_odometer':1025,'expected_revision':1}).status_code==409
-    assert owner.put('/api/labor-rates',json={'technician_id':recorder,'hourly_cost':0,'mileage_rate':.5}).status_code==200
     approve=path+'/'+recorder+'/approve'
     assert owner.post(approve,json={'expected_revision':2}).json()['mileage_cost']==10
     corrected=owner.put(path,json={'start_odometer':1000,'end_odometer':1025,'expected_revision':2})
-    assert corrected.status_code==200 and not corrected.json()['approved']
+    assert corrected.status_code==200 and corrected.json()['applied']
     assert len(owner.get(path).json())==1
     legacy={'started_at':(now[0]-timedelta(hours=2)).isoformat(),'ended_at':(now[0]-timedelta(hours=1)).isoformat(),'mileage':25}
     assert tech.post('/api/work-orders/'+orders[0]+'/time',json=legacy).status_code==409
@@ -183,7 +183,6 @@ def test_start_reading_saved_before_finish_and_invoice_uses_calculated_miles(set
     inv=owner.post('/api/invoices',json={'job_number':job,'number':'MILES'+uuid.uuid4().hex,'lines':[{'description':'Service labor','quantity':1,'unit_price':100}]}).json()
     endpoint='/api/invoices/'+inv['id']+'/call-mileage'
     charge={'work_order_id':orders[0],'unit_price':'1.25','tax_rate':8}
-    assert owner.post(endpoint,json=charge).status_code==422  # approval required
     assert owner.post(approve,json={'expected_revision':2}).status_code==200
     assert tech.post(endpoint,json=charge).status_code==403
     billed=owner.post(endpoint,json=charge)
@@ -203,3 +202,4 @@ def test_start_reading_saved_before_finish_and_invoice_uses_calculated_miles(set
     assert owner.post('/api/invoices/'+inv['id']+'/issue').status_code==200
     assert owner.delete(endpoint+'/'+orders[0]).status_code==409
     assert owner.post(endpoint,json=charge).status_code==409
+

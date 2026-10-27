@@ -11,6 +11,16 @@ from sqlalchemy import String, Text, ForeignKey, DateTime, select
 from sqlalchemy.orm import Mapped, mapped_column, Session
 from . import main as m, call_pricing as p
 
+class CallEquipmentIn(BaseModel):
+    location_id:str|None=None
+    asset_tag:str=Field(min_length=1,max_length=100)
+    equipment_type:str=Field(default='',max_length=120)
+    manufacturer:str=Field(default='',max_length=120)
+    model:str=Field(default='',max_length=120)
+    serial:str=Field(default='',max_length=120)
+    refrigerant:str=Field(default='',max_length=60)
+    notes:str=Field(default='',max_length=5000)
+
 ZERO=Decimal('0')
 
 def dec(value):return Decimal(str(value or 0))
@@ -448,6 +458,36 @@ def attach_profit_tracking(app):
             if job.location_id:query=query.where(m.Equipment.location_id==job.location_id)
             linked=set(db.scalars(select(m.WorkOrderEquipment.equipment_id).where(m.WorkOrderEquipment.work_order_id==wo_id)))
             return [{'id':a.id,'asset_tag':a.asset_tag,'manufacturer':a.manufacturer,'model':a.model,'location':db.get(m.Location,a.location_id).name,'linked':a.id in linked} for a in db.scalars(query)]
+    @app.get('/api/calls/{wo_id}/equipment-locations')
+    def equipment_locations(wo_id:str,user=Depends(m.current_user)):
+        from .productivity import access
+        with Session(m.engine) as db:
+            w=access(db,wo_id,user);job=db.get(m.Job,w.job_id)
+            locations=list(db.scalars(select(m.Location).where(m.Location.customer_id==job.customer_id).order_by(m.Location.name)))
+            if job.location_id:locations=[l for l in locations if l.id==job.location_id]
+            return {'location_id':job.location_id,'locations':[{'id':l.id,'name':l.name,'address':l.address} for l in locations]}
+    @app.post('/api/calls/{wo_id}/service-systems',status_code=201)
+    def create_call_equipment(wo_id:str,data:CallEquipmentIn,user=Depends(m.current_user)):
+        from .productivity import access
+        from sqlalchemy import func
+        with Session(m.engine) as db:
+            w=access(db,wo_id,user);p.call(db,wo_id,lock=True);m.field_report_open(db,wo_id)
+            job=db.get(m.Job,w.job_id)
+            export=db.get(p.CallPricingExport,(wo_id,'invoice'))
+            if export and db.get(m.InvoiceRecord,export.record_id).status!='Draft':raise HTTPException(409,'Issued call system links are locked')
+            lid=data.location_id or job.location_id
+            if not lid:raise HTTPException(422,'Choose a service location for this equipment')
+            location=db.scalar(select(m.Location).where(m.Location.id==lid).with_for_update())
+            if not location or location.customer_id!=job.customer_id or (job.location_id and job.location_id!=lid):
+                raise HTTPException(422,'Equipment must belong to this call’s customer and service location')
+            tag=data.asset_tag.strip()
+            if not tag:raise HTTPException(422,'Enter an equipment name or asset tag')
+            if db.scalar(select(m.Equipment.id).where(m.Equipment.location_id==lid,func.lower(m.Equipment.asset_tag)==tag.lower())):
+                raise HTTPException(409,'Equipment with this name already exists at this site. Choose it from the existing equipment list.')
+            asset=m.Equipment(location_id=lid,**{**data.model_dump(exclude={'location_id'}),'asset_tag':tag})
+            db.add(asset);db.flush();db.add(m.WorkOrderEquipment(work_order_id=wo_id,equipment_id=asset.id))
+            m.log(db,'CREATE_CALL_EQUIPMENT','equipment',asset.id,wo_id);db.commit()
+            return {**m.equipment_payload(asset,db),'linked':True}
     @app.post('/api/calls/{wo_id}/service-systems/{equipment_id}')
     def link_system(wo_id:str,equipment_id:str,user=Depends(m.current_user)):
         from .productivity import access
@@ -502,4 +542,5 @@ def attach_profit_tracking(app):
             row=db.scalar(select(CustomerFollowUp).where(CustomerFollowUp.id==follow_id,CustomerFollowUp.customer_id==customer_id).with_for_update())
             if not row:raise HTTPException(404,'Follow-up not found')
             return save_follow(db,customer_id,data,user,row)
+
 

@@ -121,6 +121,10 @@ class SettingsIn(BaseModel):
   return self
 
 class InvoiceMetaIn(BaseModel):
+ separate_material_labor:bool=True
+ taxable:bool|None=None
+ tax_rate:Decimal=Field(default=Decimal('0'),ge=0,le=100,decimal_places=3)
+ job_summary:str=Field(default='',max_length=5000)
  customer_po:str=Field(default='',max_length=150)
  service_from:date|None=None
  service_to:date|None=None
@@ -185,6 +189,11 @@ def settings(db):
 
 def metadata(db,inv):
  row=db.get(CommercialInvoice,inv.id);v=json.loads(row.json) if row else {}
+ link=db.scalar(select(p.CallPricingExport).where(p.CallPricingExport.kind=='invoice',p.CallPricingExport.record_id==inv.id))
+ v.setdefault('job_summary',db.get(m.WorkOrder,link.work_order_id).summary if link else db.get(m.Job,inv.job_id).description)
+ lines=m.invoice_lines(db,inv)
+ v.setdefault('taxable',any(line.tax_amount>0 for line in lines))
+ v.setdefault('tax_rate',str(next((line.tax_rate for line in lines if line.tax_rate>0),Decimal('0'))))
  return {'revision':row.revision if row else 0,'values':v}
 
 
@@ -324,7 +333,22 @@ def attach_billing(app):
    if data.expected_revision!=(r.revision if r else 0):raise HTTPException(409,'Invoice details changed; reload')
    if not r:r=CommercialInvoice(invoice_id=invoice_id);db.add(r)
    else:r.revision+=1
-   r.json=data.model_dump_json(exclude={'expected_revision'});db.commit();return metadata(db,inv)
+   values=json.loads(r.json) if r.json else {}
+   values.update(data.model_dump(mode='json',exclude={'expected_revision'},exclude_unset=True))
+   if data.taxable is not None:
+    rate=data.tax_rate if data.taxable else Decimal('0')
+    if data.taxable and rate<=0:raise HTTPException(422,'Enter a tax rate or uncheck Taxable')
+    lines=m.invoice_lines(db,inv)
+    if not lines and data.taxable:raise HTTPException(422,'Add invoice lines before applying tax')
+    if lines:
+     # Update tax fields in place: preserve mileage links and the reviewed pre-tax subtotal.
+     net=tax=Decimal('0')
+     for line in lines:
+      item=m.InvoiceLineInput(description=line.description,quantity=line.quantity,unit_price=line.unit_price,tax_rate=rate)
+      line.subtotal,line.tax_amount=m.line_calculation(item);line.tax_rate=rate;net+=line.subtotal;tax+=line.tax_amount
+     inv.amount=net+tax
+    values['tax_rate']=str(rate)
+   r.json=p.dump(values);m.log(db,'SAVE_INVOICE_OPTIONS','invoice',inv.id,p.dump(values));db.commit();return metadata(db,inv)
  @app.get('/api/admin/customer-contacts')
  def contacts(user=Depends(p.owner)):
   with Session(m.engine) as db:return [{'id':r.id,'customer_id':r.customer_id,'location_id':r.location_id,'name':r.name,'email':r.email,'purpose':r.purpose} for r in db.scalars(select(CustomerContact).where(CustomerContact.active==True))]
@@ -424,3 +448,4 @@ def attach_billing(app):
    for ref,number,job_id,amount,issued,due in validated:
     inv=m.InvoiceRecord(job_id=job_id,number=number,amount=amount,status='Issued',issued_on=issued,due_on=due);db.add(inv);db.flush();db.add(WaveOpening(invoice_id=inv.id,source_reference=ref));details=CommercialInvoice(invoice_id=inv.id,json=p.dump({'note':'Wave opening outstanding balance only; not the original invoice total. Use the original Wave document for history.','opening_balance_only':True}));db.add(details)
    m.log(db,'IMPORT_WAVE_OPENING_BALANCES','accounting','wave',str(len(validated)));db.commit();return {'valid_rows':len(validated),'errors':[],'committed':True}
+

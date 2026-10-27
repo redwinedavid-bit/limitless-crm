@@ -157,6 +157,7 @@ def defaults_for(db,customer_id=None):
     if global_row:result.update(json.loads(global_row.values_json))
     specific=db.get(PricingDefaults,customer_id) if customer_id else None
     if specific:result.update(json.loads(specific.values_json))
+    result['mileage_sell_per_mile']='1.00'
     row=specific if customer_id else global_row
     return {'values':result,'overrides':json.loads(row.values_json) if row else {},'revision':row.revision if row else 0,'customer_id':customer_id}
 

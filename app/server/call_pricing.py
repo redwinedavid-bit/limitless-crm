@@ -96,6 +96,8 @@ class PricingIn(BaseModel):
     expected_revision:int=Field(default=0,ge=0)
 
 class ExportIn(BaseModel):
+    separate_material_labor:bool=True
+    taxable:bool|None=None
     expected_revision:int=Field(ge=1)
     number:str=Field(min_length=2,max_length=70)
     tax_rate:Decimal=Field(default=Decimal('0'),ge=0,le=100,max_digits=7,decimal_places=3)
@@ -143,7 +145,8 @@ def recorded_costs(db,wo_id):
                          str(approval.overtime_hours) if approval else None])
     for row in mileage:
         if row.end_odometer is None:blockers.append('Ending odometer is missing')
-        if row.approved_cost is None:blockers.append('Call mileage needs office approval')
+        from .time_clock import apply_saved_mileage
+        apply_saved_mileage(db,row)
         miles+=row.miles
         if row.approved_cost is not None:vehicle+=row.approved_cost
         evidence.append([row.technician_id,row.revision,str(row.miles),str(row.approved_cost)])
@@ -221,7 +224,7 @@ def calculate(db,wo_id,data):
     overtime_hours=Decimal(recorded['overtime_hours']) if recorded and data.overtime_sell_per_hour is not None else Decimal('0')
     add_line('Call labor (including travel time)',hours-overtime_hours,data.labor_sell_per_hour)
     if overtime_hours:add_line('Overtime labor (including travel time)',overtime_hours,data.overtime_sell_per_hour)
-    add_line('Call mileage',miles,data.mileage_sell_per_mile)
+    add_line('Call mileage',miles,Decimal('1.00'))
     if data.other_charge:add_line('Additional service materials / expenses',Decimal('1'),data.other_charge)
     if data.service_charge:add_line('Service call charge',Decimal('1'),data.service_charge)
     if len(lines)>150:raise HTTPException(422,'Too many invoice lines')
@@ -378,7 +381,11 @@ def attach_call_pricing(app):
             row=db.scalar(select(CallPricing).where(CallPricing.work_order_id==wo_id,CallPricing.mode==mode))
             if not row or row.revision!=data.expected_revision:raise HTTPException(409,'Save and reload the current pricing revision before exporting')
             snapshot=json.loads(row.snapshot_json);export_floor(snapshot)
+            effective_tax=data.tax_rate if data.taxable is not False else Decimal('0')
+            if data.taxable is True and effective_tax<=0:raise HTTPException(422,'Enter a tax rate or uncheck Taxable')
+            invoice_options={'separate_material_labor':data.separate_material_labor,'taxable':effective_tax>0,'tax_rate':str(effective_tax)}
             if kind=='invoice':
+                if Decimal(snapshot.get('miles','0'))>0 and any(line['description']=='Call mileage' and Decimal(line['unit_price'])!=1 for line in snapshot['lines']):raise HTTPException(409,'Recalculate and save pricing to apply the standard $1 per mile')
                 tech_ids=sorted(set(db.scalars(select(m.FieldTimeEntry.technician_id).where(m.FieldTimeEntry.work_order_id==wo_id))) | set(db.scalars(select(m.CallMileage.technician_id).where(m.CallMileage.work_order_id==wo_id))))
                 for technician_id in tech_ids:m.lock_time_user(db,technician_id)
                 current=recorded_costs(db,wo_id)
@@ -388,7 +395,7 @@ def attach_call_pricing(app):
             if existing:
                 model=m.InvoiceRecord if kind=='invoice' else m.Proposal
                 record=db.scalar(select(model).where(model.id==existing.record_id).with_for_update())
-                if existing.pricing_revision==row.revision:
+                if existing.pricing_revision==row.revision and (kind!='invoice' or json.loads(existing.snapshot_json).get('invoice_options')==invoice_options):
                     return {'kind':kind,'id':record.id,'number':record.number,'status':record.status,'already_exported':True}
                 if record.status!='Draft':raise HTTPException(409,'Export is already approved or issued; use the existing billing adjustment workflow')
                 if record.number!=data.number:raise HTTPException(409,'Use the existing draft number to refresh its pricing')
@@ -421,10 +428,19 @@ def attach_call_pricing(app):
                     m.lock_time_user(db,item.technician_id);db.refresh(item)
                     link=db.get(m.MileageInvoiceLink,(wo_id,item.technician_id))
                     if link:raise HTTPException(409,'Call mileage has already been invoiced separately; review before creating a full-call invoice')
-                items=[m.InvoiceLineInput(description=line['description'],quantity=line['quantity'],unit_price=line['unit_price'],tax_rate=data.tax_rate) for line in snapshot['lines']]
+                labor=sum((Decimal(line['subtotal']) for line in snapshot['lines'] if line['description'].startswith(('Call labor','Overtime labor'))),Decimal('0'))
+                materials=Decimal(snapshot['selling_subtotal'])-labor
+                items=[m.InvoiceLineInput(description=name,quantity=1,unit_price=value,tax_rate=effective_tax) for name,value in [('Labor',labor),('Materials',materials)]] if labor and materials else [m.InvoiceLineInput(description='Labor' if labor else 'Materials',quantity=1,unit_price=Decimal(snapshot['selling_subtotal']),tax_rate=effective_tax)]
+                from .billing_v111 import CommercialInvoice
+                commercial=db.get(CommercialInvoice,record.id)
+                values=json.loads(commercial.json) if commercial else {}
+                values.update({**invoice_options,'job_summary':w.summary})
+                if commercial:commercial.json=dump(values);commercial.revision+=1
+                else:db.add(CommercialInvoice(invoice_id=record.id,json=dump(values)))
+                snapshot={**snapshot,'invoice_options':invoice_options}
                 net,tax=m.put_invoice_lines(db,record,items);record.amount=net+tax
                 db.flush()
-                mileage_line=next((line for line in m.invoice_lines(db,record) if line.description=='Call mileage'),None)
+                mileage_line=next((line for line in m.invoice_lines(db,record) if line.description=='Materials'),None)
                 if mileage_line:
                     for item in odometer:
                         if item.miles>0:db.add(m.MileageInvoiceLink(work_order_id=wo_id,technician_id=item.technician_id,invoice_id=record.id,invoice_line_id=mileage_line.id))
@@ -434,3 +450,4 @@ def attach_call_pricing(app):
             m.log(db,'EXPORT_CALL_PRICING',kind,record.id,f'{wo_id}; {mode} revision {row.revision}')
             db.commit()
             return {'kind':kind,'id':record.id,'number':record.number,'status':record.status,'already_exported':False}
+

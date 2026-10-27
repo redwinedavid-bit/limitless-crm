@@ -59,12 +59,12 @@ def test_dr_auto_number_no_approval_costs_receiving_credits():
     assert step(c,n,'approve').status_code==410
     assert step(c,n,'issue').status_code==410
     costs=c.get('/api/jobs/'+j+'/costs').json()
-    assert costs['new_po_actual']==0 and costs['open_committed']==100
+    assert costs['new_po_actual']==100 and costs['open_committed']==0
     assert step(c,n,'receipts',{'reference':'PACK1','amount':'60','received_on':'2026-10-24'}).status_code==201
     assert step(c,n,'receipts',{'reference':'PACK1','amount':'1','received_on':'2026-10-24'}).status_code==409
     assert step(c,n,'receipts',{'reference':'OVER','amount':'40.01','received_on':'2026-10-24'}).status_code==422
     assert step(c,n,'vendor-invoices',{'reference':'BILL1','amount':'65','matched_receipt_value':'60','invoice_date':'2026-10-24'}).status_code==201
-    assert c.get('/api/jobs/'+j+'/costs').json()['new_po_actual']==65
+    assert c.get('/api/jobs/'+j+'/costs').json()['new_po_actual']==105
     assert step(c,n,'receipts',{'reference':'PACK2','amount':'40','received_on':'2026-10-24'}).status_code==201
     assert step(c,n,'vendor-invoices',{'reference':'BILL2','amount':'40','matched_receipt_value':'40','invoice_date':'2026-10-24'}).status_code==201
     assert c.get('/api/jobs/'+j+'/costs').json()['new_po_actual']==105
@@ -123,3 +123,4 @@ def test_db_separate_sequence_cross_buyer_denial_and_historical_preservation():
     assert owner.get('/api/purchasing/jobs/'+j).json()['historical_direct_cost']==150
     assert step(owner,hist,'receipts',{'reference':'NO','amount':'1','received_on':'2026-10-24'}).status_code==403
     assert owner.get('/api/jobs/'+j+'/costs').json()['new_po_actual']==0
+

@@ -36,7 +36,12 @@ def purchasing_events(db):
  vendor credits do that. This preserves the PO ledger's max-zero behavior.
  """
  result=[];by_po=defaultdict(lambda:defaultdict(lambda:defaultdict(lambda:ZERO)))
- ids=list(db.scalars(select(m.PurchaseOrder.id).where(m.PurchaseOrder.source!='historical')))
+ pos=list(db.scalars(select(m.PurchaseOrder).where(m.PurchaseOrder.source!='historical')))
+ ids=[po.id for po in pos]
+ for po in pos:
+  if po.issue_date:by_po[po.id][po.issue_date]['issued']+=po.amount
+ for audit in db.scalars(select(m.AuditEvent).where(m.AuditEvent.entity_id.in_(ids),m.AuditEvent.event.in_(('CANCEL','CLOSE')))):
+  by_po[audit.entity_id][local_day(audit.created_at)]['closed']+=1
  if not ids:return result
  for model,dayfield,kind in [(m.POReceipt,'received_on','received'),(m.POReturn,'returned_on','returned'),(m.POVendorInvoice,'invoice_date','invoiced'),(m.POVendorCredit,'credited_on','credits')]:
   for row in db.scalars(select(model).where(model.po_id.in_(ids))):
@@ -47,6 +52,7 @@ def purchasing_events(db):
   for day in sorted(events):
    for k,v in events[day].items():totals[k]+=v
    actual=totals['invoiced']-totals['credits']+max(ZERO,max(ZERO,totals['received']-totals['returned'])-totals['matched'])
+   if totals['issued'] and not totals['closed']:actual+=max(ZERO,totals['issued']-totals['received'])
    delta=actual-old;old=actual
    if delta:result.append((day,delta,'purchasing'))
  return result
@@ -121,7 +127,7 @@ def build(db,period='month',anchor=None,start=None,end=None):
   'summary':{'issued_total_including_tax':money(issued),'issued_count':issued_count,'credit_memos_including_tax':money(credits),'net_payments_received_including_tax':money(net_collections),'recorded_job_cost':money(cost),'cost_breakdown':{'purchasing':money(purchasing),'approved_labor':money(labor),'approved_vehicle':money(vehicle)},'calls_created':len(calls),'new_pos':po_created,'matched_call_margin_percent':money(margin) if margin is not None else None,'matched_call_count':matched_count,'excluded_linked_calls':excluded,'unmatched_issued_count':issued_count-matched_count-excluded,'matched_revenue_pretax':money(matched_revenue),'matched_cost':money(matched_cost),'matched_gross_profit':money(matched_revenue-matched_cost)},
   'receivables':{'as_of':str(asof),'outstanding':money(outstanding),'overdue_total':money(sum((Decimal(r['balance']) for r in overdue),ZERO)),'overdue':sorted(overdue,key=lambda r:r['due_on']),'due_next_30_total':money(sum((Decimal(r['balance']) for r in upcoming),ZERO)),'due_next_30':sorted(upcoming,key=lambda r:r['due_on'])},
   'issued_details':sorted(details,key=lambda r:r['date'],reverse=True),'coverage':{'undated_invoices':undated,'invoices_without_itemized_tax':unknown_tax,'wave_openings_excluded_from_new_revenue':True},
-  'basis':{'revenue':'Invoices issued on their issue dates, including sales tax; Wave opening balances excluded. Credit memos are shown separately, not silently deducted from issued totals.','payments':'Full check receipts plus other payments, less check returns, non-check reversals and refunds; allocations and deposits are not additional receipts. Includes any sales tax.','cost':'PO net actual changes on receipt/bill/return/credit dates, approved labor and legacy mileage on work start date, and approved odometer costs on approval date. Negative costs reflect credits/adjustments.','margin':'Current reviewed call-pricing costs matched to invoices issued in the selected period, before sales tax and overhead. Incomplete or adjusted calls are excluded; manual/unlinked invoices do not establish cost coverage. Later adjustments can make historical margin coverage incomplete.','limits':'Operational overview, not company net profit, taxable income or a complete cash-expense ledger. Unrecorded costs, business overhead, non-PO expenses and unapproved field costs are not included. Historical spreadsheet costs have no reliable dated posting and are excluded from this period chart.'}}
+  'basis':{'revenue':'Invoices issued on their issue dates, including sales tax; Wave opening balances excluded. Credit memos are shown separately, not silently deducted from issued totals.','payments':'Full check receipts plus other payments, less check returns, non-check reversals and refunds; allocations and deposits are not additional receipts. Includes any sales tax.','cost':'PO amounts on issue dates with later receipt/bill/return/credit adjustments, approved labor and legacy mileage on work start date, and automatically applied odometer costs on save date. Negative costs reflect credits/adjustments.','margin':'Current reviewed call-pricing costs matched to invoices issued in the selected period, before sales tax and overhead. Incomplete or adjusted calls are excluded; manual/unlinked invoices do not establish cost coverage. Later adjustments can make historical margin coverage incomplete.','limits':'Operational overview, not company net profit, taxable income or a complete cash-expense ledger. Unrecorded costs, business overhead, non-PO expenses and unapproved field costs are not included. Historical spreadsheet costs have no reliable dated posting and are excluded from this period chart.'}}
 
 def attach_overview(app):
  @app.get('/business-overview')
@@ -131,3 +137,4 @@ def attach_overview(app):
  @app.get('/api/admin/business-overview')
  def overview(period:str='month',anchor:date|None=None,start:date|None=None,end:date|None=None,user=Depends(pricing.owner)):
   with Session(m.engine) as db:return build(db,period,anchor,start,end)
+

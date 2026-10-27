@@ -63,13 +63,31 @@ def active_payload(db, active):
             'started_at': as_utc(active.started_at).isoformat()}
 
 
+def apply_saved_mileage(db,row,actor_id=None):
+    # Legacy approval columns now hold the automatic cost snapshot. Saving mileage
+    # does not approve labor or grant financial permissions to the recording user.
+    if row.end_odometer is None or row.approved_cost is not None:return
+    rate=db.scalar(select(m.LaborRate).where(m.LaborRate.technician_id==row.technician_id))
+    if rate is not None:cost_rate=rate.mileage_rate
+    else:
+        from .productivity import defaults_for
+        job=db.get(m.Job,db.get(m.WorkOrder,row.work_order_id).job_id)
+        cost_rate=Decimal(defaults_for(db,job.customer_id)['values']['mileage_cost_per_mile'])
+    row.approved_cost=(row.miles*cost_rate).quantize(Decimal('.01'),rounding=ROUND_HALF_UP)
+    row.approved_by=actor_id or row.technician_id
+    row.approved_at=row.updated_at
+    m.log(db,'AUTO_APPLY_CALL_MILEAGE','work_order',row.work_order_id,
+          f'{row.miles} miles; cost rate {cost_rate}; revision {row.revision}')
+    db.flush()
+
+
 def mileage_payload(db, row):
     return {'work_order_id': row.work_order_id, 'technician_id': row.technician_id,
             'technician': db.get(m.User, row.technician_id).display_name,
             'start_odometer': float(row.start_odometer), 'end_odometer': float(row.end_odometer) if row.end_odometer is not None else None,
             'complete': row.end_odometer is not None, 'miles': float(row.miles), 'revision': row.revision,
             'invoiced': bool(db.get(m.MileageInvoiceLink, (row.work_order_id, row.technician_id))),
-            'updated_at': as_utc(row.updated_at).isoformat(), 'approved': row.approved_cost is not None}
+            'updated_at': as_utc(row.updated_at).isoformat(), 'approved': row.approved_cost is not None, 'applied':row.end_odometer is not None, 'mileage_cost':float(row.approved_cost) if row.approved_cost is not None else None}
 
 
 class StartClock(BaseModel):
@@ -104,6 +122,13 @@ class MileageInvoiceIn(BaseModel):
 
 
 def attach_time_clock(app):
+    @app.on_event('startup')
+    def apply_existing_mileage():
+        with Session(m.engine) as db:
+            rows=list(db.scalars(select(m.CallMileage).where(m.CallMileage.end_odometer!=None,m.CallMileage.approved_cost==None).with_for_update()))
+            for row in rows:apply_saved_mileage(db,row)
+            db.commit()
+
     from fastapi.responses import FileResponse
 
     @app.get('/time-review')
@@ -210,6 +235,7 @@ def attach_time_clock(app):
                                      revision=1, updated_at=clock_now())
                 db.add(row)
             db.flush()
+            apply_saved_mileage(db,row,user['id'])
             m.log(db, 'SAVE_CALL_MILEAGE', 'work_order', wo_id, f'Edited by {user["id"]}; rate member {mileage_user_id}; {old} -> {miles} miles; odometer {data.start_odometer} -> {data.end_odometer}; revision {row.revision}')
             result = mileage_payload(db, row); db.commit()
             return result
@@ -238,7 +264,7 @@ def attach_time_clock(app):
             if row.end_odometer is None:
                 raise HTTPException(422, 'Enter the ending odometer before approving mileage')
             if row.approved_cost is not None:
-                raise HTTPException(409, 'Mileage already approved')
+                return {'approved':True,'mileage_cost':float(row.approved_cost)}
             rate = db.scalar(select(m.LaborRate).where(m.LaborRate.technician_id == technician_id))
             if not rate:
                 raise HTTPException(422, 'Configure the recording team member\'s mileage cost rate first')
@@ -316,3 +342,4 @@ def attach_time_clock(app):
             m.log(db,'REMOVE_DRAFT_CALL_MILEAGE','invoice',inv.id,wo_id)
             db.commit()
             return m.invoice_data(inv,db)
+

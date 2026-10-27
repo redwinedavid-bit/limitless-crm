@@ -62,6 +62,7 @@ def make_invoice_pdf(invoice, job, customer, paid, lines=None, ledger=None,servi
     if service_location:
         left.extend([Spacer(1,6),p('SERVICE LOCATION','label'),p(service_location.name+'\n'+service_location.address)])
     story=[table([[left,[p('INVOICE DETAILS','label'),p(details)]]],[300,228]),Spacer(1,12)]
+    if commercial.get('job_summary'):story.extend([p('JOB SUMMARY','label'),p(commercial['job_summary']),Spacer(1,10)])
     rows=[[p('DESCRIPTION','label'),p('QTY','label'),p('UNIT','label'),p('TAX','label'),p('AMOUNT','label')]]
     lines=lines or []
     subtotal=sum((x.subtotal for x in lines),Decimal('0')) if lines else invoice.amount
@@ -77,7 +78,14 @@ def make_invoice_pdf(invoice, job, customer, paid, lines=None, ledger=None,servi
         text=str(job.description or 'HVAC services')
         rows.append([p(text[:650]),p('1'),p(money(invoice.amount),'right'),p('$0.00','right'),p(money(invoice.amount),'right')])
         for i in range(650,len(text),650):rows.append([p(text[i:i+650]),p(''),p(''),p(''),p('')])
-    items=LongTable(rows,colWidths=[249,32,78,65,104],repeatRows=1,hAlign='LEFT')
+    if 'separate_material_labor' in commercial and lines:
+        labor=sum((line.subtotal for line in lines if str(line.description).startswith(('Labor','Call labor','Overtime labor'))),Decimal('0'))
+        materials=subtotal-labor
+        display=[('Labor',labor),('Materials',materials)] if commercial['separate_material_labor'] else [('Services & Materials',subtotal)]
+        rows=[[p('DESCRIPTION','label'),p('AMOUNT','label')]]+[[p(name),p(money(value),'right')] for name,value in display if value]
+        widths=[400,128]
+    else:widths=[249,32,78,65,104]
+    items=LongTable(rows,colWidths=widths,repeatRows=1,hAlign='LEFT')
     items.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),ACCENT_TINT),('LINEBELOW',(0,0),(-1,0),1,ACCENT),('LINEBELOW',(0,1),(-1,-1),.4,LINE),('VALIGN',(0,0),(-1,-1),'TOP'),('TOPPADDING',(0,0),(-1,-1),6),('BOTTOMPADDING',(0,0),(-1,-1),6)]))
     story.extend([items,Spacer(1,12)])
     if ledger is not None:
@@ -129,6 +137,10 @@ def gmail_send(to,subject,body,pdf,filename,message_id=None):
     msg=EmailMessage()
     msg['From']=sender
     msg['To']=to
+    from email.utils import getaddresses
+    accounting_copy='accounting@limitlessmechanical.net'
+    if accounting_copy not in {address.lower() for _,address in getaddresses([to])}:
+        msg['Bcc']=accounting_copy
     msg['Reply-To']=sender
     if message_id:msg['Message-ID']=message_id
     msg['Subject']=subject
@@ -138,3 +150,4 @@ def gmail_send(to,subject,body,pdf,filename,message_id=None):
     result=_post('https://gmail.googleapis.com/gmail/v1/users/me/messages/send',json.dumps({'raw':raw}).encode(),{'Authorization':'Bearer '+token,'Content-Type':'application/json'})
     if not result.get('id'):raise RuntimeError('Gmail did not return a message identifier')
     return result['id']
+

@@ -61,7 +61,7 @@ def test_call_po_uses_assigned_job_and_retries_once(setup_clock):
     assert tech.post('/api/calls/'+unassigned+'/purchase-orders',json={**data,'request_id':str(uuid.uuid4())}).status_code==403
     assert clients['other'].post(path,json={**data,'request_id':str(uuid.uuid4())}).status_code==403
     financial=owner.get('/api/jobs/'+job+'/financial-overview').json()
-    assert financial['open_new_po_commitment']==75 and financial['new_po_actual']==0
+    assert financial['open_new_po_commitment']==0 and financial['new_po_actual']==75
 
 
 def test_proposal_dashboard_tracks_out_and_links_accepted_job_once(setup_clock):
@@ -95,3 +95,4 @@ def test_employee_purchasing_access_requires_admin_and_unique_designator(setup_c
     assert owner.put(path,json={'prefix':'AR'}).status_code==200
     assert owner.put('/api/admin/employees/'+other+'/po-designator',json={'prefix':'AR'}).status_code==409
     assert owner.put(path,json={'prefix':'DB'}).status_code==409
+

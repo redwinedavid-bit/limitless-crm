@@ -3,9 +3,9 @@ import base64
 import uuid
 from decimal import Decimal
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import select, create_engine
 from sqlalchemy.orm import Session
-from server.main import app,engine,Customer,Job,PurchaseOrder
+from server.main import app,engine,Base,Customer,Job,PurchaseOrder
 from server.security import User,password_hash
 
 
@@ -48,13 +48,15 @@ def test_dr_auto_number_no_approval_costs_receiving_credits():
             db.add(PurchaseOrder(po_number='DR0210',job_id=job.id,vendor='URI',amount=Decimal('10'),
                                  received_value=Decimal('10'),status='Historical',source='historical'))
         db.commit()
-    assert c.get('/api/purchasing/my-number').json()['next_preview']=='DR0211'
+    # Other integration tests share this database and may already have issued DR POs.
+    expected=c.get('/api/purchasing/my-number').json()['next_preview']
+    assert expected.startswith('DR') and int(expected[2:])>=211
     assert create(c,'LMS999999999').status_code==422
     assert create(c,j,'5.125').status_code==422
     assert create(c,j,number='AR9999').status_code==422
     po=create(c,j);assert po.status_code==201,po.text
-    assert po.json()['number']=='DR0211' and po.json()['status']=='Issued' and po.json()['job_number']==j
-    assert c.get('/api/purchasing/my-number').json()['next_preview']=='DR0212'
+    assert po.json()['number']==expected and po.json()['status']=='Issued' and po.json()['job_number']==j
+    assert c.get('/api/purchasing/my-number').json()['next_preview']==f'DR{int(expected[2:])+1:04d}'
     n=po.json()['number']
     assert step(c,n,'approve').status_code==410
     assert step(c,n,'issue').status_code==410
@@ -124,3 +126,22 @@ def test_db_separate_sequence_cross_buyer_denial_and_historical_preservation():
     assert step(owner,hist,'receipts',{'reference':'NO','amount':'1','received_on':'2026-10-24'}).status_code==403
     assert owner.get('/api/jobs/'+j+'/costs').json()['new_po_actual']==0
 
+
+
+def test_historical_po_number_seeds_sequence_in_isolated_database():
+    from server.purchasing_v13 import generate_number
+    isolated=create_engine('sqlite://')
+    try:
+        Base.metadata.create_all(isolated)
+        with Session(isolated) as db:
+            customer=Customer(name='Isolated numbering test');db.add(customer);db.flush()
+            job=Job(job_number='LMS-NUMBERING',customer_id=customer.id);db.add(job);db.flush()
+            db.add(PurchaseOrder(po_number='DR0210',job_id=job.id,vendor='Legacy supplier',
+                amount=Decimal('10'),received_value=Decimal('10'),status='Historical',source='historical'))
+            db.commit()
+            assert generate_number(db,'DR')=='DR0211'
+            db.commit()
+        with Session(isolated) as db:
+            assert generate_number(db,'DR')=='DR0212'
+    finally:
+        isolated.dispose()

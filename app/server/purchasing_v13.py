@@ -10,12 +10,32 @@ from typing import Optional
 from pathlib import Path
 import os, re, uuid
 from pydantic import BaseModel, Field, ConfigDict
-from sqlalchemy import select, func, text
-from sqlalchemy.orm import Session
+from sqlalchemy import select, func, text, ForeignKey, Numeric, String
+from sqlalchemy.orm import Session, Mapped, mapped_column
 from fastapi import Depends, HTTPException, UploadFile, File, Form
 from . import main as m
 from . import private_storage as storage
 from fastapi.responses import FileResponse
+
+class POInvoiceCost(m.Base):
+    __tablename__='po_invoice_costs'
+    po_id:Mapped[str]=mapped_column(ForeignKey('purchase_orders.id',ondelete='RESTRICT'),primary_key=True)
+    invoice_id:Mapped[str]=mapped_column(ForeignKey('crm_invoices.id',ondelete='RESTRICT'),nullable=False,index=True)
+    cost:Mapped[Decimal]=mapped_column(Numeric(14,2),nullable=False)
+
+
+def invoice_materials(db,wo_id):
+    from .call_pricing import CallPricingExport
+    work=db.get(m.WorkOrder,wo_id)
+    export=db.get(CallPricingExport,(wo_id,'invoice'))
+    invoice_id=export.record_id if export else None
+    result=[]
+    for po in db.scalars(select(m.PurchaseOrder).where(m.PurchaseOrder.job_id==work.job_id,m.PurchaseOrder.source!='historical').order_by(m.PurchaseOrder.po_number)):
+        link=db.get(POInvoiceCost,po.id)
+        if link and link.invoice_id!=invoice_id:continue
+        cost=details(db,po)['actual']
+        if cost>0:result.append({'id':po.id,'number':po.po_number,'cost':str(cost)})
+    return result
 
 MONEY = Decimal('0.01')
 def val(x):return m.cents(x)

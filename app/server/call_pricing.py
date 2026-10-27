@@ -143,6 +143,9 @@ def recorded_costs(db,wo_id):
         evidence.append([entry.id,str(entry.hours),str(entry.mileage),approval.id if approval else None,
                          str(approval.labor_cost) if approval else None,str(approval.mileage_cost) if approval else None,
                          str(approval.overtime_hours) if approval else None])
+    from .purchasing_v13 import invoice_materials
+    po_materials=invoice_materials(db,wo_id)
+    evidence.append(['job_purchase_orders',po_materials])
     for row in mileage:
         if row.end_odometer is None:blockers.append('Ending odometer is missing')
         from .time_clock import apply_saved_mileage
@@ -172,11 +175,18 @@ def calculate(db,wo_id,data):
         if quantity<=0:return
         subtotal=money(quantity*unit_price);price+=subtotal
         lines.append({'description':description,'quantity':str(quantity),'unit_price':str(unit_price),'subtotal':str(subtotal)})
+    from .purchasing_v13 import invoice_materials
+    po_materials=invoice_materials(db,wo_id) if data.mode=='actual' else []
+    from .purchasing_v13 import POInvoiceCost
+    job_po_billing=bool(po_materials) or (data.mode=='actual' and bool(db.scalar(select(POInvoiceCost.po_id).join(m.PurchaseOrder,POInvoiceCost.po_id==m.PurchaseOrder.id).where(m.PurchaseOrder.job_id==job.id))))
+    po_cost=sum((Decimal(po['cost']) for po in po_materials),Decimal('0'))
+    costs+=po_cost
+    if po_cost:add_line('Job purchase order materials',Decimal('1'),po_cost)
     from .call_field_notes import usage_rows
     usages={row.id:row for row in usage_rows(db,wo_id)}
     if data.mode=='actual':
         supplied=[line.usage_id for line in data.parts if line.usage_id]
-        if len(supplied)!=len(set(supplied)) or set(supplied)!=set(usages):blockers.append('Load all technician-reported parts into actual pricing')
+        if len(supplied)!=len(set(supplied)) or (not job_po_billing and set(supplied)!=set(usages)):blockers.append('Load all technician-reported parts into actual pricing')
         for line in data.parts:
             if line.usage_id and (line.usage_id not in usages or line.quantity!=usages[line.usage_id].quantity or line.part_id!=usages[line.usage_id].part_id):
                 blockers.append('Reported part quantities changed; reload reported parts')
@@ -194,11 +204,13 @@ def calculate(db,wo_id,data):
             sku='';unit='each'
         extended_cost=money(unit_cost*requested.quantity)
         cost_basis='Catalog / declared cost'
-        if data.mode=='actual' and requested.usage_id:
+        if data.mode=='actual' and requested.usage_id and not job_po_billing:
             from .operations_v110 import allocation_details
             allocation=allocation_details(db,requested.usage_id);blockers.extend(allocation['blockers'])
             if allocation['amount'] is not None:
                 extended_cost=allocation['amount'];unit_cost=money(extended_cost/requested.quantity);cost_basis='Allocated purchase receipts (extended total governs)'
+        if data.mode=='actual' and job_po_billing and requested.usage_id:
+            extended_cost=Decimal('0');unit_cost=Decimal('0');unit_price=Decimal('0');cost_basis='Included in job purchase orders'
         costs+=extended_cost
         parts.append({'part_id':requested.part_id,'usage_id':requested.usage_id,'catalog_revision':requested.catalog_revision,
                       'sku':sku,'description':description,'unit':unit,'quantity':str(requested.quantity),
@@ -226,7 +238,6 @@ def calculate(db,wo_id,data):
     if overtime_hours:add_line('Overtime labor (including travel time)',overtime_hours,data.overtime_sell_per_hour)
     add_line('Call mileage',miles,Decimal('1.00'))
     if data.other_charge:add_line('Additional service materials / expenses',Decimal('1'),data.other_charge)
-    if data.service_charge:add_line('Service call charge',Decimal('1'),data.service_charge)
     if len(lines)>150:raise HTTPException(422,'Too many invoice lines')
     costs=money(costs);price=money(price);margin_floor=minimum_price(costs,data.target_margin);floor=max(margin_floor,minimum_call)
     adjustment=max(Decimal('0'),floor-price) if data.auto_target else Decimal('0')
@@ -237,6 +248,7 @@ def calculate(db,wo_id,data):
             price+=adjustment
         else:add_line('Service call charge',Decimal('1'),adjustment)
         price=money(price)
+    if data.service_charge:add_line('Service Fee',Decimal('1'),data.service_charge)
     if max(costs,price,floor)>Decimal('999999999999.99'):raise HTTPException(422,'Call pricing exceeds the supported amount')
     if price<=0:blockers.append('Enter a positive customer selling price')
     margin=(price-costs)/price*100 if price>0 else None
@@ -250,7 +262,7 @@ def calculate(db,wo_id,data):
             'allocated_overhead':str(overhead),'profit_after_allocated_overhead':str(money(price-costs-overhead)),
             'minimum_call_price':str(minimum_call),'policy_sources':policy['sources'],
             'margin_override':{'reason':override_reason,'approved':False} if override else None,
-            'parts_cost':str(parts_cost),'labor_hours':str(hours),'labor_cost':str(labor),
+            'purchase_orders':po_materials,'po_material_cost':str(po_cost),'service_fee':str(data.service_charge),'parts_cost':str(parts_cost),'labor_hours':str(hours),'labor_cost':str(labor),
             'miles':str(miles),'mileage_cost':str(vehicle),'other_cost':str(data.other_cost),
             'total_direct_cost':str(costs),'selling_subtotal':str(price),'gross_profit':str(money(price-costs)),
             'gross_margin_percent':str(money(margin)) if margin is not None else None,
@@ -378,6 +390,7 @@ def attach_call_pricing(app):
         mode='estimate' if kind=='proposal' else 'actual'
         with Session(m.engine) as db:
             w=call(db,wo_id,lock=True)
+            db.scalar(select(m.Job).where(m.Job.id==w.job_id).with_for_update(key_share=True))
             row=db.scalar(select(CallPricing).where(CallPricing.work_order_id==wo_id,CallPricing.mode==mode))
             if not row or row.revision!=data.expected_revision:raise HTTPException(409,'Save and reload the current pricing revision before exporting')
             snapshot=json.loads(row.snapshot_json);export_floor(snapshot)
@@ -429,15 +442,22 @@ def attach_call_pricing(app):
                     link=db.get(m.MileageInvoiceLink,(wo_id,item.technician_id))
                     if link:raise HTTPException(409,'Call mileage has already been invoiced separately; review before creating a full-call invoice')
                 labor=sum((Decimal(line['subtotal']) for line in snapshot['lines'] if line['description'].startswith(('Call labor','Overtime labor'))),Decimal('0'))
-                materials=Decimal(snapshot['selling_subtotal'])-labor
-                items=[m.InvoiceLineInput(description=name,quantity=1,unit_price=value,tax_rate=effective_tax) for name,value in [('Labor',labor),('Materials',materials)]] if labor and materials else [m.InvoiceLineInput(description='Labor' if labor else 'Materials',quantity=1,unit_price=Decimal(snapshot['selling_subtotal']),tax_rate=effective_tax)]
+                service_fee=Decimal(snapshot.get('service_fee','0'))
+                materials=Decimal(snapshot['selling_subtotal'])-labor-service_fee
+                items=[m.InvoiceLineInput(description=name,quantity=1,unit_price=value,tax_rate=effective_tax) for name,value in [('Labor',labor),('Materials',materials),('Service Fee',service_fee)] if value>0]
                 from .billing_v111 import CommercialInvoice
                 commercial=db.get(CommercialInvoice,record.id)
                 values=json.loads(commercial.json) if commercial else {}
-                values.update({**invoice_options,'job_summary':w.summary})
+                values.update({**invoice_options,'job_summary':w.summary,'include_service_fee':bool(service_fee)})
                 if commercial:commercial.json=dump(values);commercial.revision+=1
                 else:db.add(CommercialInvoice(invoice_id=record.id,json=dump(values)))
                 snapshot={**snapshot,'invoice_options':invoice_options}
+                from .purchasing_v13 import POInvoiceCost
+                for po in snapshot.get('purchase_orders',[]):
+                    posted=db.get(POInvoiceCost,po['id'])
+                    if posted and posted.invoice_id!=record.id:raise HTTPException(409,'A job PO is already included on another invoice; recalculate pricing')
+                    if posted:posted.cost=Decimal(po['cost'])
+                    else:db.add(POInvoiceCost(po_id=po['id'],invoice_id=record.id,cost=Decimal(po['cost'])))
                 net,tax=m.put_invoice_lines(db,record,items);record.amount=net+tax
                 db.flush()
                 mileage_line=next((line for line in m.invoice_lines(db,record) if line.description=='Materials'),None)

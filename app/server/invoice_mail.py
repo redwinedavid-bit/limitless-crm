@@ -80,8 +80,10 @@ def make_invoice_pdf(invoice, job, customer, paid, lines=None, ledger=None,servi
         for i in range(650,len(text),650):rows.append([p(text[i:i+650]),p(''),p(''),p(''),p('')])
     if 'separate_material_labor' in commercial and lines:
         labor=sum((line.subtotal for line in lines if str(line.description).startswith(('Labor','Call labor','Overtime labor'))),Decimal('0'))
-        materials=subtotal-labor
-        display=[('Labor',labor),('Materials',materials)] if commercial['separate_material_labor'] else [('Services & Materials',subtotal)]
+        fee=sum((line.subtotal for line in lines if line.description=='Service Fee'),Decimal('0'))
+        materials=subtotal-labor-fee
+        display=[('Labor',labor),('Materials',materials)] if commercial['separate_material_labor'] else [('Services & Materials',subtotal-fee)]
+        if fee:display.append(('Service Fee',fee))
         rows=[[p('DESCRIPTION','label'),p('AMOUNT','label')]]+[[p(name),p(money(value),'right')] for name,value in display if value]
         widths=[400,128]
     else:widths=[249,32,78,65,104]

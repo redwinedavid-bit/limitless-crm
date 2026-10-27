@@ -102,8 +102,8 @@ def test_receipt_matching_exact_total_replaces_cost_and_blocks_double_allocation
  priced=owner.put('/api/call-pricing/'+wo+'/actual',json=quote(mode='actual',parts=[{'usage_id':used['id'],'description':'Small parts','quantity':3,'unit_cost':1,'unit_price':10}],labor_sell_per_hour=100,expected_revision=1))
  assert priced.status_code==200,priced.text
  snapshot=priced.json()['pricing'];assert snapshot['parts_cost']=='10.00' and snapshot['total_direct_cost']=='60.00'
- assert snapshot['parts'][0]['cost_basis'].startswith('Allocated purchase receipts')
- matched=owner.get('/api/admin/calls/'+wo+'/reconciliation').json();assert matched['parts'][0]['status']=='Matched'
+ assert snapshot['parts'][0]['cost_basis']=='Included in job purchase orders'
+ matched=owner.get('/api/admin/calls/'+wo+'/reconciliation').json();assert matched['parts'][0]['status']=='Save actual pricing with receipt costs'
  used2=tech.post('/api/calls/'+wo+'/parts-used',json={'client_request_id':str(uuid.uuid4()),'description':'Other parts','quantity':1,'unit':'each'}).json()
  assert owner.put('/api/admin/calls/'+wo+'/parts/'+used2['id']+'/receipt',json={'receipt_id':rid,'amount':1,'note':'Try reuse'}).status_code==422
 
@@ -209,3 +209,4 @@ def test_three_individual_logins_admin_finances_technician_assignment_and_disabl
  assert owner.put('/api/admin/team/'+tid+'/active',json={'active':False,'expected_revision':1}).status_code==200
  assert technician.get('/api/auth/me').status_code==401
  assert owner.put('/api/admin/team/'+aid+'/active',json={'active':False,'expected_revision':0}).status_code==409
+

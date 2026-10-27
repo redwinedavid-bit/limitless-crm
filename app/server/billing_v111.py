@@ -121,6 +121,7 @@ class SettingsIn(BaseModel):
   return self
 
 class InvoiceMetaIn(BaseModel):
+ include_service_fee:bool|None=None
  separate_material_labor:bool=True
  taxable:bool|None=None
  tax_rate:Decimal=Field(default=Decimal('0'),ge=0,le=100,decimal_places=3)
@@ -331,10 +332,24 @@ def attach_billing(app):
    if inv.status!='Draft':raise HTTPException(409,'Issued invoice details are locked')
    r=db.get(CommercialInvoice,invoice_id)
    if data.expected_revision!=(r.revision if r else 0):raise HTTPException(409,'Invoice details changed; reload')
-   if not r:r=CommercialInvoice(invoice_id=invoice_id);db.add(r)
+   if not r:r=CommercialInvoice(invoice_id=invoice_id,json='{}');db.add(r)
    else:r.revision+=1
    values=json.loads(r.json) if r.json else {}
    values.update(data.model_dump(mode='json',exclude={'expected_revision'},exclude_unset=True))
+   if (data.include_service_fee or data.taxable is not None) and not m.invoice_lines(db,inv) and inv.amount>0:
+    db.add(m.InvoiceLine(invoice_id=inv.id,position=1,description='Services & Materials',quantity=1,unit_price=inv.amount,tax_rate=0,subtotal=inv.amount,tax_amount=0));db.flush()
+   if data.include_service_fee is not None:
+    fees=[line for line in m.invoice_lines(db,inv) if line.description=='Service Fee']
+    if data.include_service_fee and not fees:
+     current=m.invoice_lines(db,inv);rate=data.tax_rate if data.taxable else Decimal('0')
+     if data.taxable is None:rate=next((line.tax_rate for line in current if line.tax_rate>0),Decimal('0'))
+     item=m.InvoiceLineInput(description='Service Fee',quantity=1,unit_price=100,tax_rate=rate)
+     net,tax=m.line_calculation(item)
+     db.add(m.InvoiceLine(invoice_id=inv.id,position=max((line.position for line in current),default=0)+1,description='Service Fee',quantity=1,unit_price=100,tax_rate=rate,subtotal=net,tax_amount=tax));inv.amount+=net+tax
+    elif not data.include_service_fee:
+     for line in fees:inv.amount-=line.subtotal+line.tax_amount;db.delete(line)
+    db.flush()
+    p.validate_invoice_margin(db,inv)
    if data.taxable is not None:
     rate=data.tax_rate if data.taxable else Decimal('0')
     if data.taxable and rate<=0:raise HTTPException(422,'Enter a tax rate or uncheck Taxable')

@@ -114,9 +114,15 @@ def make_invoice_pdf(invoice, job, customer, paid, lines=None, ledger=None,servi
     doc.build(story,onFirstPage=page,onLaterPages=page)
     return buf.getvalue()
 
-def configured():
+def configured(sender='accounting@limitlessmechanical.net'):
+    from .email_connections import EmailConnection,connected
+    from . import main as m
+    from sqlalchemy.orm import Session
+    with Session(m.engine) as db:
+        row=db.get(EmailConnection,sender)
+        if row:return connected(db,sender)
     names=('LMS_GMAIL_CLIENT_ID','LMS_GMAIL_CLIENT_SECRET','LMS_GMAIL_REFRESH_TOKEN','LMS_GMAIL_SENDER')
-    return all(os.getenv(x) for x in names)
+    return sender=='accounting@limitlessmechanical.net' and all(os.getenv(x) for x in names) and os.environ['LMS_GMAIL_SENDER'].lower()==sender
 
 def _post(url,body,headers=None):
     req=urllib.request.Request(url,data=body,headers=headers or {},method='POST')
@@ -127,21 +133,27 @@ def _post(url,body,headers=None):
     except (urllib.error.URLError,TimeoutError) as ex:
         raise RuntimeError('Gmail provider unavailable') from ex
 
-def gmail_send(to,subject,body,pdf,filename,message_id=None):
-    if not configured():raise RuntimeError('Gmail integration not configured')
-    sender=os.environ['LMS_GMAIL_SENDER']
-    token=_post('https://oauth2.googleapis.com/token',urllib.parse.urlencode({'client_id':os.environ['LMS_GMAIL_CLIENT_ID'],'client_secret':os.environ['LMS_GMAIL_CLIENT_SECRET'],'refresh_token':os.environ['LMS_GMAIL_REFRESH_TOKEN'],'grant_type':'refresh_token'}).encode(),{'Content-Type':'application/x-www-form-urlencoded'})['access_token']
-    request=urllib.request.Request('https://gmail.googleapis.com/gmail/v1/users/me/settings/sendAs/'+urllib.parse.quote(sender,safe=''),headers={'Authorization':'Bearer '+token})
-    try:
-        with urllib.request.urlopen(request,timeout=15) as response:alias=json.loads(response.read())
-    except Exception as exc:raise RuntimeError('Unable to verify authorized accounting send-as address') from exc
-    if alias.get('sendAsEmail','').lower()!=sender.lower() or alias.get('verificationStatus')!='accepted':raise RuntimeError('Accounting send-as address is not verified')
+def gmail_send(to,subject,body,pdf,filename,message_id=None,sender='accounting@limitlessmechanical.net'):
+    from .email_connections import EmailConnection,SENDERS,access_token
+    from . import main as m
+    from sqlalchemy.orm import Session
+    if sender not in SENDERS or not configured(sender):raise RuntimeError('Connect the selected sending account first')
+    with Session(m.engine) as db:has_connection=db.get(EmailConnection,sender) is not None
+    if has_connection:
+        token=access_token(sender)
+    else:
+        token=_post('https://oauth2.googleapis.com/token',urllib.parse.urlencode({'client_id':os.environ['LMS_GMAIL_CLIENT_ID'],'client_secret':os.environ['LMS_GMAIL_CLIENT_SECRET'],'refresh_token':os.environ['LMS_GMAIL_REFRESH_TOKEN'],'grant_type':'refresh_token'}).encode(),{'Content-Type':'application/x-www-form-urlencoded'})['access_token']
+        request=urllib.request.Request('https://gmail.googleapis.com/gmail/v1/users/me/settings/sendAs/'+urllib.parse.quote(sender,safe=''),headers={'Authorization':'Bearer '+token})
+        try:
+            with urllib.request.urlopen(request,timeout=15) as response:alias=json.loads(response.read())
+        except Exception as exc:raise RuntimeError('Unable to verify authorized accounting send-as address') from exc
+        if alias.get('sendAsEmail','').lower()!=sender.lower() or alias.get('verificationStatus')!='accepted':raise RuntimeError('Accounting send-as address is not verified')
     msg=EmailMessage()
     msg['From']=sender
     msg['To']=to
     from email.utils import getaddresses
     accounting_copy='accounting@limitlessmechanical.net'
-    if accounting_copy not in {address.lower() for _,address in getaddresses([to])}:
+    if sender==accounting_copy and accounting_copy not in {address.lower() for _,address in getaddresses([to])}:
         msg['Bcc']=accounting_copy
     msg['Reply-To']=sender
     if message_id:msg['Message-ID']=message_id
@@ -152,4 +164,5 @@ def gmail_send(to,subject,body,pdf,filename,message_id=None):
     result=_post('https://gmail.googleapis.com/gmail/v1/users/me/messages/send',json.dumps({'raw':raw}).encode(),{'Authorization':'Bearer '+token,'Content-Type':'application/json'})
     if not result.get('id'):raise RuntimeError('Gmail did not return a message identifier')
     return result['id']
+
 

@@ -284,7 +284,7 @@ def process_mail(mail_id):
   if row.status!='Queued':return mail_payload(row)
   if settings(db)['values']['test_mode'] or os.getenv('LMS_ALLOW_EXTERNAL_EMAIL')!='1':
    row.status='Preview';db.commit();return mail_payload(row)
-  if not settings(db)['values']['remit_address'] or not m.gmail_configured() or os.getenv('LMS_GMAIL_SENDER','').lower()!=SENDER:
+  if not settings(db)['values']['remit_address'] or not m.gmail_configured():
    row.status='Failed';row.error='Set the remittance address and authorize accounting@limitlessmechanical.net before sending';db.commit();return mail_payload(row)
   inv=db.scalar(select(m.InvoiceRecord).where(m.InvoiceRecord.id==row.invoice_id).with_for_update())
   if not freeze_invoice(db,inv)['commercial'].get('remit_address'):
@@ -535,4 +535,5 @@ def attach_billing(app):
    for ref,number,job_id,amount,issued,due in validated:
     inv=m.InvoiceRecord(job_id=job_id,number=number,amount=amount,status='Issued',issued_on=issued,due_on=due);db.add(inv);db.flush();db.add(WaveOpening(invoice_id=inv.id,source_reference=ref));details=CommercialInvoice(invoice_id=inv.id,json=p.dump({'note':'Wave opening outstanding balance only; not the original invoice total. Use the original Wave document for history.','opening_balance_only':True}));db.add(details)
    m.log(db,'IMPORT_WAVE_OPENING_BALANCES','accounting','wave',str(len(validated)));db.commit();return {'valid_rows':len(validated),'errors':[],'committed':True}
+
 

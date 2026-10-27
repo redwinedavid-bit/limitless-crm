@@ -1364,7 +1364,7 @@ def _invoice_pdf(db,invoice):
 def invoice_email_status(user=Depends(require('view_financials'))):
     from .billing_v111 import settings
     with Session(engine) as db:preview=settings(db)['values']['test_mode']
-    return {'configured':gmail_configured(),'sender':os.environ.get('LMS_GMAIL_SENDER','') if gmail_configured() else '', 'preview_mode':preview}
+    return {'configured':gmail_configured(),'sender':'accounting@limitlessmechanical.net' if gmail_configured() else '', 'preview_mode':preview}
 
 @app.get('/api/invoices/{invoice_id}/pdf')
 def invoice_pdf(invoice_id:str,user=Depends(require('view_financials'))):
@@ -1524,4 +1524,10 @@ attach_customer_import(app)
 
 from .site_cleanup import attach_site_cleanup
 attach_site_cleanup(app)
+
+from .email_connections import attach_email_connections
+attach_email_connections(app)
+from .quote_mail import attach_quote_mail
+attach_quote_mail(app)
+
 
